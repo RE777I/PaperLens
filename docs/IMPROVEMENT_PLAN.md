@@ -79,7 +79,10 @@ Effort: **S** = an hour or two, **M** = about a day, **L** = several days.
 
 ## For development
 
-- [ ] **12. Version control** (S). The project isn't in git, so there's no history and no easy undo of a large change.
+- [x] **12. Version control** (S). *Done 2026-11-01:* git repository with `.gitignore` (build output, APKs,
+  `local.properties`, keystores, `rawInstallation/`, `rawScreenshot/`, `models/`) and `.gitattributes`; releases via
+  `scripts/release.ps1` (signed APKs on GitHub Releases). Checked: no secrets or binaries in the 132 tracked files.
+  Original task: The project isn't in git, so there's no history and no easy undo of a large change.
   Set up git with `.gitignore` for build output, APKs and keystores, and make a first commit.
   *Done when:* `git log` shows the baseline commit and build output isn't tracked.
 - [ ] **13. Move test tools and data into the project** (S). The detection scorer, scanner app reference crops, SmartDoc

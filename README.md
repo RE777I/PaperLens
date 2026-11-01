@@ -45,6 +45,20 @@ Four tabs, laid out like a typical scanner app:
 | QR / barcodes | Camera scan, or read every code in a saved photo (Me → Code history → image button); history of scanned codes |
 | Shortcuts | Long-press the launcher icon → *Scan document*, *Scan QR code* |
 
+## Releases
+
+Every version is published on the repository's **Releases** page (GitHub → PaperLens → Releases) with signed APKs:
+`PaperLens-<version>-arm64-v8a.apk` for almost every phone, `armeabi-v7a` for older 32-bit phones and `x86_64` for emulators.
+To be notified of new ones, use **Watch → Custom → Releases** on the repository page.
+
+To publish a new version (needs `gh auth login` once and the signing setup below):
+
+```powershell
+.\scripts\release.ps1 -Version 1.1.0 -Notes "What changed"
+```
+
+The script refuses to run with uncommitted changes, bumps `versionName`/`versionCode`, builds the signed release APKs, tags `v<version>`, pushes, and creates the GitHub release with the APKs attached. Release builds shrink the code with R8; libraries that look up classes by name need keep rules in `app/proguard-rules.pro` (PdfBox, ONNX Runtime).
+
 ## Build
 
 Requirements: Android Studio (Ladybug or newer, with JDK 17) and Android SDK 35.
