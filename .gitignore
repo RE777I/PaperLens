@@ -21,3 +21,6 @@ captures/
 /models/
 # Reference scanner app screenshots, analysis and personal test photos (large, not ours to publish)
 /rawScreenshot/
+
+# Claude Code project settings (local only)
+/.claude/
