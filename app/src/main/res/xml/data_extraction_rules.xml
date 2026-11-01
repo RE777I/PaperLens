@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+. Cloud backups (Google Drive) keep only the settings: scans, the library and anything read
+  from them stay on the phone, even with App lock off. Moving to a new phone by cable or Wi-Fi (device
+  transfer) is local and deliberate, so it takes everything except debug files.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="datastore/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="probe/" />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,23 @@
+.gradle/
+build/
+/app/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+# third-party reference binary, never commit
+/rawInstallation/
+*.jks
+*.keystore
+/.kotlin/
+# Built APKs are published as GitHub Releases, not committed
+*.apk
+*.aab
+/release/
+# 40 MB model copy for reference; the app downloads the model itself
+/models/
+# Reference scanner app screenshots, analysis and personal test photos (large, not ours to publish)
+/rawScreenshot/

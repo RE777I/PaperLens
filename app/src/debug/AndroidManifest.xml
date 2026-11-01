@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: a receiver for checking the filters against reference images (see FilterProbe).
+     DUMP is held by adb shell but cannot be granted to other apps. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".debug.FilterProbe"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
+    </application>
+</manifest>

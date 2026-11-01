@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_scan"
+        android:shortcutId="scan"
+        android:shortcutLongLabel="@string/shortcut_scan_long"
+        android:shortcutShortLabel="@string/shortcut_scan">
+        <intent
+            android:action="com.paperlens.app.action.SCAN"
+            android:targetClass="com.paperlens.app.MainActivity"
+            android:targetPackage="com.paperlens.app" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_qr"
+        android:shortcutId="qr"
+        android:shortcutLongLabel="@string/shortcut_qr_long"
+        android:shortcutShortLabel="@string/shortcut_qr">
+        <intent
+            android:action="com.paperlens.app.action.SCAN_QR"
+            android:targetClass="com.paperlens.app.MainActivity"
+            android:targetPackage="com.paperlens.app" />
+    </shortcut>
+</shortcuts>
