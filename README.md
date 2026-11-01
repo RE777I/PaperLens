@@ -150,6 +150,15 @@ These need a server, an account system or heavier on-device models:
 - AI chat over documents, formula and homework solving, object counting, invoice parsing
 - AI photo restoration, moiré removal, watermark removal
 
+## License
+
+PaperLens is licensed under the **PolyForm Strict License 1.0.0** (see [LICENSE.md](LICENSE.md)): you may use it for
+non-commercial purposes only, and you may not change it, build on it or distribute it. Anything else needs written
+permission from the author.
+
+Third-party parts keep their own licenses: the DocAligner model and PdfBox-Android (Apache License 2.0), ONNX Runtime
+(MIT), Google ML Kit (Google APIs Terms of Service) and the AndroidX / Jetpack libraries (Apache License 2.0).
+
 ## Credits
 
 Page-corner detection uses the FastViT-SA24 heatmap model from [DocAligner](https://github.com/DocsaidLab/DocAligner) by DocsaidLab (Apache License 2.0; licence text in `app/src/main/assets/docaligner_LICENSE.txt`), run with [ONNX Runtime](https://onnxruntime.ai). The model is **not inside the APK** (that keeps the arm64 APK about 42 MB smaller): the first time it is needed on Wi-Fi, the app downloads the authors' published file (83 MB, from their Google Drive link) in the background and checks its SHA-256; on mobile data it waits until you tap **Download** in Me → Scan → Page detection model, which also shows progress. Until then pages are found with the line and paper-colour finders. Phones that had the earlier built-in copy keep using it. The fp16 copy previously shipped is kept in `models/` for reference. On SmartDoc 2015 frames it reaches a mean IoU of 0.99 versus 0.16 for the previous edge-only detector, which remains as the fallback. When the model finds no page in the stretched photo (tall phone photos, signs, pages touching the photo edge), it takes a second look at the photo on a square canvas with a 5 % margin; this fixed the two badly placed corners in the scanner app sample photos without changing the SmartDoc score.
