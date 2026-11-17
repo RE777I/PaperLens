@@ -93,14 +93,49 @@ Effort: **S** = an hour or two, **M** = about a day, **L** = several days.
   - Converter: the wordFeature pages keep their tables, pictures and handwriting.
   - Detection: the scanner app crop score as a test that fails if it drops.
   *Done when:* `gradlew test` (or a documented script) runs them and passes.
-- [ ] **15. Split the largest files** (M). `DocxReader.kt` (1,193 lines), `PageAnalysis.kt` (983),
+- [x] **15. Split the largest files** (M). *Done 2026-11-02:* `DocxReader` → `DocxReader`/`DocxXml`/`DocxBody`,
+  `PageAnalysis` → + `PageShapes`/`PagePictures`/`PageInk`, `PageToWord` → + `PageTables`, `CaptureScreen` → +
+  `CaptureParts`/`CameraControls`, `DocumentScreen` → + `DocumentParts`, `DocumentRepository` → + `RepositoryLibrary`;
+  largest file now 634 lines. Checked: Word probe (5 pages) and detect probe (17 photos) identical to before, camera,
+  document screen, sheets, selection and .docx edit/save/reopen tried on the emulator.
+  Original task: `DocxReader.kt` (1,193 lines), `PageAnalysis.kt` (983),
   `DocumentScreen.kt` (862) and `CaptureScreen.kt` (809) are hard to change safely. Split them by responsibility.
   *Done when:* no file is over about 600 lines and behaviour is unchanged (probe and screenshots match).
-- [ ] **16. Don't swallow errors** (S). 34 `runCatching` calls ignore failures silently. Log each one, and show a message
+- [x] **16. Don't swallow errors** (S). *Done 2026-11-02:* 31 silent calls now use `runLogged(tag, what)`
+  (`Failures.kt`, same fallbacks); the other 14 already showed a message or returned the error. Automatic
+  Save to Gallery after a scan now says when pages didn't save (new string in all three languages).
+  Original task: 34 `runCatching` calls ignore failures silently. Log each one, and show a message
   where the user is affected.
   *Done when:* every `runCatching` logs or reports its failure.
-- [ ] **17. Update libraries** (S). 19 libraries have newer versions (Compose BOM is 2024.09).
+- [x] **17. Update libraries** (S). *Done 2026-11-02:* all libraries current (Compose BOM 2026.09, Room 2.8,
+  CameraX 1.6, Navigation 2.10, ONNX Runtime 1.31.1 — now 16 KB-page aligned), which needed AGP 9.5, Gradle 9.8,
+  Kotlin 2.4, KSP 2.3 and compileSdk 37 (targetSdk stays 35). Security pass: all 221 runtime libraries clean on
+  OSV after pinning BouncyCastle 1.86 (was 1.72) and Guava 33.7.2; only official publishers; libraries add no
+  data permissions. Checked: lint 0 errors / no GradleDependency, probes identical (detection to 0.001 px), smoke
+  test incl. a password PDF verified with pypdf.
+  Original task: 19 libraries have newer versions (Compose BOM is 2024.09).
   *Done when:* lint shows no `GradleDependency` warnings, and the app builds and passes a smoke test.
+- [x] **18. Excel files and a better To Excel** (L). *Done 2026-11-02:* .xlsx files import (Import Files,
+  Open with, Share) into the library (DB v9 `excelPath`, X badge, sheet cover) and open in a sheet viewer
+  (`ui/excel`: tabs, merges, widths, formats, frozen panes, fling, pinch zoom, cell editing with Save/Discard that
+  patches only the edited cells). To Excel (`excel/SheetBuilder.kt`) now uses ruled grids (shared with To Word),
+  shaded-row and borderless tables built column first, divider lines, header rows, multi-line cells and typed
+  numbers, and saves a new Excel document. Checked with the new `excel` probe mode on 10 table photos (6 from
+  Wikimedia Commons, 4 of the user's): mean cell accuracy 34 % → 89 %, rows fully right 12 % → 82 %, expected numbers
+  stored as numbers 2 % → 85 % (35 of 41); an openpyxl workbook imported from Downloads displayed, edited, saved and re-read intact;
+  Word probe unchanged; lint 0 errors.
+  Original task: read .xlsx files like Word documents, and make To Excel much better at real tables.
+  *Done when:* an imported .xlsx displays correctly and To Excel scores clearly better on a table test set.
+- [x] **19. Tools tab: smarter picker, real Compress, Page Numbers, Create Code** (M). *Done 2026-11-16:* the banner
+  reads "Toolkit". The document picker lists only documents the tool can use, has a search box from 7 documents and
+  Scan new / Import file shortcuts that continue into the tool (`ToolRunner.scanFor`/`importFor`/`performAfter`).
+  Compress shows estimated sizes for the three qualities, shares or saves to the device, and no longer leaves
+  imported PDF pages untouched (`Exporter.pdf(shrinkPdfPages)`, `estimatePdfBytes`). New tools: Page Numbers
+  (`PageComposer.pageNumber`) and Create Code (`imaging/QrCodes.kt`, ZXing core 3.5.3, OSV clean). Fixed: the
+  camera's To Word / To Excel / Timestamp modes saved the scan but skipped the tool (a busy task started inside
+  another was dropped). Checked on the emulator: each dialog, Compress via Import file and via Scan new, numbers
+  "1 / 3" on three pages, a created code decoded with OpenCV, timestamp stamped after a camera scan; lint 0 errors.
+- [x] **20. Readability: shallower loops** (M). *Done 2026-11-17:* license switched to GPL-3.0-or-later. Loops nested 4+ deep went from 6 to 0 and 3+ deep from 23 to 6 (script `nesting.py`): `detectByEdges`, `blur`, `hough`, `hullQuad`, `fitCubic`, `boxBlur`/`maxFilter`, `mosaic`, the picture finder (`PagePictures.kt`), ruled-line tracking and grid cells (`PageAnalysis.kt`, shared `DisjointSets`) were split into small named functions. Checked: Word probe (5 pages), detect probe (17 photos) and To Excel probe (10 photos, 60 output files) are byte-identical to the build before; lint 0 errors. *Left:* the 3-deep `DocxXml.parse`, `SheetGrid.area`, `SheetBuilder.emitGrid`/`splitAtRules`, and the 100–500-line Compose screens (`DocumentScreen`, `CameraContent`, `FilesTab`…).
 
 ## Already done (for reference)
 

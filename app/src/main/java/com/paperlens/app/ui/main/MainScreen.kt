@@ -47,6 +47,7 @@ import com.paperlens.app.ui.home.HomeTab
 import com.paperlens.app.ui.me.MeTab
 import com.paperlens.app.ui.tools.Tool
 import com.paperlens.app.ui.tools.isDocx
+import com.paperlens.app.ui.tools.isXlsx
 import com.paperlens.app.ui.tools.ToolNavigator
 import com.paperlens.app.ui.tools.ToolRunnerHost
 import com.paperlens.app.ui.tools.ToolsTab
@@ -101,7 +102,7 @@ fun MainScreen(
             ExternalRequest.ScanQr -> runner.run(Tool.SCAN_CODE)
             is ExternalRequest.Import -> {
                 val repo = context.app.repository
-                if (request.uris.any { isDocx(context, it) }) {
+                if (request.uris.any { isDocx(context, it) || isXlsx(context, it) }) {
                     runner.onFilesPicked(request.uris)
                 } else if (request.isPdf) {
                     runner.busy.run(S.str(R.string.importing_pdf)) { nav.openDocument(PdfImporter.import(context, request.uris.first(), repo)) }

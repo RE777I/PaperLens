@@ -1,8 +1,5 @@
 package com.paperlens.app.ui.files
 
-import com.paperlens.app.S
-import com.paperlens.app.R
-
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
@@ -37,7 +35,6 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CreateNewFolder
-import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.DriveFolderUpload
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
@@ -74,8 +71,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.paperlens.app.R
+import com.paperlens.app.S
 import com.paperlens.app.app
 import com.paperlens.app.data.FolderSummary
+import com.paperlens.app.data.createFolder
+import com.paperlens.app.data.deleteFolder
+import com.paperlens.app.data.moveToFolder
+import com.paperlens.app.data.observeFolder
+import com.paperlens.app.data.observeFolderDocuments
+import com.paperlens.app.data.observeFolders
+import com.paperlens.app.data.renameFolder
 import com.paperlens.app.ui.components.ConfirmDialog
 import com.paperlens.app.ui.components.DocumentRow
 import com.paperlens.app.ui.components.DocumentThumbnail

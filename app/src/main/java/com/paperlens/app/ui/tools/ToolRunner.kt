@@ -1,32 +1,19 @@
 package com.paperlens.app.ui.tools
 
-import com.paperlens.app.S
-import com.paperlens.app.R
-
 import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -34,48 +21,56 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.paperlens.app.R
+import com.paperlens.app.S
 import com.paperlens.app.app
 import com.paperlens.app.data.DocumentEntity
-import com.paperlens.app.data.PageEntity
 import com.paperlens.app.data.ExportQuality
+import com.paperlens.app.data.PageEntity
+import com.paperlens.app.data.addQr
+import com.paperlens.app.data.createWordDocument
+import com.paperlens.app.data.createExcelDocument
+import com.paperlens.app.data.importDocx
+import com.paperlens.app.data.importXlsx
+import com.paperlens.app.data.moveToFolder
 import com.paperlens.app.export.Exporter
 import com.paperlens.app.export.GallerySaver
 import com.paperlens.app.export.PdfImporter
 import com.paperlens.app.export.Sharing
-import com.paperlens.app.export.XlsxWriter
 import com.paperlens.app.imaging.BitmapUtils
 import com.paperlens.app.imaging.ImageFilter
 import com.paperlens.app.imaging.PageComposer
-import com.paperlens.app.ml.TableOcr
-import com.paperlens.app.ui.word.DOCX_MIME
-import com.paperlens.app.word.DocxReader
-import com.paperlens.app.word.DocxWriter
-import com.paperlens.app.word.PageToWord
+import com.paperlens.app.imaging.QrCodes
 import com.paperlens.app.security.AppLock
 import com.paperlens.app.ui.capture.CaptureMode
 import com.paperlens.app.ui.capture.CaptureScreen
 import com.paperlens.app.ui.components.BusyController
 import com.paperlens.app.ui.components.BusyOverlay
-import com.paperlens.app.ui.components.DocumentThumbnail
 import com.paperlens.app.ui.components.OcrTextSheet
 import com.paperlens.app.ui.components.QrResultDialog
 import com.paperlens.app.ui.components.TextInputDialog
 import com.paperlens.app.ui.components.ToolButton
+import com.google.mlkit.vision.barcode.common.Barcode
 import com.paperlens.app.ui.components.barcodeFormatName
 import com.paperlens.app.ui.components.findActivity
-import com.paperlens.app.ui.components.formatDate
 import com.paperlens.app.ui.components.rememberBusy
 import com.paperlens.app.ui.components.rememberDocumentScanner
 import com.paperlens.app.ui.components.startQrScan
 import com.paperlens.app.ui.components.toast
+import com.paperlens.app.ui.word.DOCX_MIME
+import com.paperlens.app.excel.PageToExcel
+import com.paperlens.app.excel.XlsxReader
+import com.paperlens.app.excel.XlsxWriter
+import com.paperlens.app.word.DocxReader
+import com.paperlens.app.word.DocxWriter
+import com.paperlens.app.word.PageToWord
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -116,6 +111,7 @@ class ToolRunner internal constructor(
     internal var launchImages: () -> Unit = {}
     internal var launchFiles: () -> Unit = {}
     internal var launchPdf: () -> Unit = {}
+    internal var launchSavePdf: (String) -> Unit = {}
 
     /** Documents created by this runner are filed here (set while browsing a folder). */
     var targetFolderId: Long? = null
@@ -130,6 +126,12 @@ class ToolRunner internal constructor(
     internal var captureSingle by mutableStateOf(false)
     private var pendingPdf = PdfPurpose.TO_IMAGES
 
+    /** The tool waiting for the document that the picker's "Scan new" or "Import file" shortcut is making. */
+    private var then: Tool? = null
+
+    /** Builds the PDF that "Save to device" writes once the user has picked where. */
+    private var pendingSave: (suspend () -> File)? = null
+
     /** Non-null while the in-app camera is open, in this mode. */
     internal var capture by mutableStateOf<CaptureMode?>(null)
 
@@ -139,9 +141,14 @@ class ToolRunner internal constructor(
     internal var watermarkFor by mutableStateOf<Long?>(null)
     internal var mergeIds by mutableStateOf<List<Long>?>(null)
     internal var showPdfTools by mutableStateOf(false)
+    internal var compressFor by mutableStateOf<DocumentEntity?>(null)
+    internal var numbersFor by mutableStateOf<DocumentEntity?>(null)
+    internal var creatingCode by mutableStateOf(false)
+    internal var codeShown by mutableStateOf<String?>(null)
 
     fun run(tool: Tool) {
         showPdfTools = false
+        then = null
         when (tool) {
             Tool.SMART_SCAN -> startScan(CaptureMode.SCAN)
             Tool.PDF_TOOLS -> showPdfTools = true
@@ -157,9 +164,10 @@ class ToolRunner internal constructor(
             Tool.PDF_TO_IMAGES -> { pendingPdf = PdfPurpose.TO_IMAGES; launchPdf() }
             Tool.PDF_TO_LONG_IMAGE -> { pendingPdf = PdfPurpose.TO_LONG_IMAGE; launchPdf() }
             Tool.SCAN_CODE -> scanCode()
+            Tool.CREATE_CODE -> creatingCode = true
             Tool.CODE_HISTORY -> nav.openCodeHistory()
             Tool.TIMESTAMP, Tool.TO_WORD, Tool.TO_EXCEL, Tool.SIGN, Tool.ADD_WATERMARK, Tool.MERGE_FILES,
-            Tool.EXTRACT_PAGES, Tool.REORDER_PAGES, Tool.LOCK, Tool.COMPRESS, Tool.PRINT,
+            Tool.EXTRACT_PAGES, Tool.REORDER_PAGES, Tool.PAGE_NUMBERS, Tool.LOCK, Tool.COMPRESS, Tool.PRINT,
             -> picking = tool
         }
     }
@@ -181,6 +189,10 @@ class ToolRunner internal constructor(
             context.toast(S.str(R.string.x_is_a_word_document_open_it_to_edit_or_shar, doc.title))
             return
         }
+        if (doc.isExcel && tool != Tool.TO_EXCEL && tool in SCAN_ONLY + Tool.TO_WORD) {
+            context.toast(S.str(R.string.x_is_an_excel_document_open_it_to_edit_or_sha, doc.title))
+            return
+        }
         when (tool) {
             Tool.TIMESTAMP -> busy.run(S.str(R.string.adding_timestamp)) {
                 val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
@@ -193,16 +205,11 @@ class ToolRunner internal constructor(
                 val word = PageToWord.convertPages(context, repo.getPages(doc.id), script)
                 nav.openDocument(repo.createWordDocument("${doc.title} (Word)", word, doc.folderId))
             }
-            Tool.TO_EXCEL -> busy.run(S.str(R.string.recognising_tables)) {
+            Tool.TO_EXCEL -> if (doc.isExcel) nav.openDocument(doc.id) else busy.run(S.str(R.string.recognising_tables)) {
+                // A new Excel document next to the scan (tables rebuilt with their cells), opened in the viewer.
                 val script = context.app.settings.current().ocrScript
-                val sheets = repo.getPages(doc.id).mapIndexed { i, page ->
-                    S.str(R.string.page_x, i + 1) to TableOcr.recognizeRows(context, File(page.imagePath), script)
-                }
-                val file = withContext(Dispatchers.IO) {
-                    val dir = File(context.cacheDir, "exports").apply { mkdirs() }
-                    XlsxWriter.write(File(dir, Exporter.safeName(doc.title) + ".xlsx"), sheets)
-                }
-                Sharing.share(context, listOf(file), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", doc.title)
+                val book = PageToExcel.convertPages(context, repo.getPages(doc.id), script)
+                nav.openDocument(repo.createExcelDocument("${doc.title} (Excel)", book, doc.folderId))
             }
             Tool.SIGN -> {
                 context.toast(S.str(R.string.swipe_to_the_page_you_want_to_sign_then_tap))
@@ -210,8 +217,8 @@ class ToolRunner internal constructor(
             }
             Tool.ADD_WATERMARK -> watermarkFor = doc.id
             Tool.MERGE_FILES -> {
-                val scans = documents.filterNot { it.isWord }
-                if (scans.size < documents.size) context.toast(S.str(R.string.word_documents_are_left_out_of_a_merge))
+                val scans = documents.filterNot { it.isFile }
+                if (scans.size < documents.size) context.toast(S.str(R.string.word_and_excel_documents_are_left_out_of_a_merge))
                 if (scans.size < 2) context.toast(S.str(R.string.choose_at_least_two_scanned_documents)) else mergeIds = scans.map { it.id }
             }
             Tool.EXTRACT_PAGES -> nav.openPagesTool(doc.id, PagesMode.EXTRACT)
@@ -227,13 +234,8 @@ class ToolRunner internal constructor(
                     context.toast(S.str(R.string.x_locked, doc.title))
                 }
             }
-            Tool.COMPRESS -> busy.run(S.str(R.string.compressing)) {
-                val pages = repo.getPages(doc.id)
-                val before = pages.sumOf { File(it.imagePath).length() }
-                val pdf = exporter.pdf(doc.title, pages, context.app.settings.current().pdfPageSize, ExportQuality.LOW)
-                context.toast(S.str(R.string.compressed_x_x, size(before), size(pdf.length())))
-                Sharing.share(context, listOf(pdf), "application/pdf", doc.title)
-            }
+            Tool.COMPRESS -> compressFor = doc
+            Tool.PAGE_NUMBERS -> numbersFor = doc
             Tool.PRINT -> busy.run(S.str(R.string.preparing_print)) {
                 val s = context.app.settings.current()
                 Sharing.printPdf(context, exporter.pdf(doc.title, repo.getPages(doc.id), s.pdfPageSize, ExportQuality.HIGH), doc.title)
@@ -245,7 +247,8 @@ class ToolRunner internal constructor(
     // ---- launcher results ------------------------------------------------------------------------
 
     /** Opens the in-app camera in [mode], or the Google scanner when that is chosen in Settings → Scan. */
-    private fun startScan(mode: CaptureMode, into: Long? = null, replace: PageEntity? = null) {
+    private fun startScan(mode: CaptureMode, into: Long? = null, replace: PageEntity? = null, then: Tool? = null) {
+        this.then = then
         pendingScan = mode
         targetDocument = into
         replacing = replace
@@ -279,7 +282,13 @@ class ToolRunner internal constructor(
         val mode = pendingScan
         pendingScan = CaptureMode.SCAN
         scope.launch {
-            if (context.app.settings.current().saveToGallery) GallerySaver.save(context, uris, repo.defaultTitle())
+            if (context.app.settings.current().saveToGallery) {
+                // This runs on its own after a scan, so say when pages didn't make it.
+                val saved = GallerySaver.save(context, uris, repo.defaultTitle())
+                if (GallerySaver.supported && saved < uris.size) {
+                    context.toast(S.str(R.string.couldn_t_save_x_of_y_pages_to_the_gallery, uris.size - saved, uris.size))
+                }
+            }
         }
         val into = targetDocument
         val replace = replacing
@@ -294,7 +303,15 @@ class ToolRunner internal constructor(
             return
         }
         when (mode) {
-            CaptureMode.SCAN, CaptureMode.SCAN_CODE -> busy.run(S.str(R.string.saving_scan)) { open(repo.createFromUris(uris)) }
+            CaptureMode.SCAN, CaptureMode.SCAN_CODE -> {
+                val tool = then
+                then = null
+                busy.run(S.str(R.string.saving_scan)) {
+                    val id = file(repo.createFromUris(uris))
+                    val doc = if (tool != null) repo.getDocument(id) else null
+                    if (doc != null) performAfter(tool!!, doc) else nav.openDocument(id)
+                }
+            }
             CaptureMode.WHITEBOARD -> busy.run(S.str(R.string.cleaning_up_whiteboard)) {
                 open(repo.createFromUris(uris, repo.defaultTitle(S.str(R.string.whiteboard)), filter = ImageFilter.MAGIC_COLOR))
             }
@@ -331,7 +348,7 @@ class ToolRunner internal constructor(
                     else -> Tool.TIMESTAMP
                 }
                 if (tool != Tool.TIMESTAMP) nav.openDocument(id)
-                perform(tool, listOf(doc))
+                performAfter(tool, doc)
             }
             CaptureMode.SMART_ERASE, CaptureMode.SIGN -> busy.run(S.str(R.string.saving_scan)) {
                 val id = file(repo.createFromUris(uris))
@@ -347,17 +364,126 @@ class ToolRunner internal constructor(
         busy.run(S.str(R.string.importing_images)) { open(repo.createFromUris(uris, repo.defaultTitle(S.str(R.string.import_text)), rawPhotos = true)) }
     }
 
-    internal fun onFilesPicked(uris: List<Uri>) {
+    /** [fromPicker]: the app's own file picker (a picker shortcut may be waiting), not a file shared into the app. */
+    internal fun onFilesPicked(uris: List<Uri>, fromPicker: Boolean = false) {
+        val tool = then.takeIf { fromPicker }
+        then = null
         if (uris.isEmpty()) return
         busy.run(S.str(R.string.importing_files)) {
-            val (words, rest) = uris.partition { isDocx(context, it) }
+            val (words, notWord) = uris.partition { isDocx(context, it) }
+            val (sheets, rest) = notWord.partition { isXlsx(context, it) }
             val (pdfs, images) = rest.partition { context.contentResolver.getType(it) == "application/pdf" }
             var last: Long? = null
             for (w in words) last = file(importDocx(w))
+            for (x in sheets) last = file(importXlsx(x))
             for (pdf in pdfs) last = file(PdfImporter.import(context, pdf, repo))
             if (images.isNotEmpty()) last = file(repo.createFromUris(images, repo.defaultTitle(S.str(R.string.import_text)), rawPhotos = true))
-            last?.let { nav.openDocument(it) }
+            val id = last ?: return@run
+            val doc = if (tool != null) repo.getDocument(id) else null
+            if (doc != null) performAfter(tool!!, doc) else nav.openDocument(id)
         }
+    }
+
+    /** Picker shortcut: scan a new document, then carry on with [tool] on it. */
+    internal fun scanFor(tool: Tool) {
+        picking = null
+        // Tools with a camera mode of their own keep it (it shows the tool's name on the shutter).
+        val mode = when (tool) {
+            Tool.TO_WORD -> CaptureMode.TO_WORD
+            Tool.TO_EXCEL -> CaptureMode.TO_EXCEL
+            Tool.TIMESTAMP -> CaptureMode.TIMESTAMP
+            Tool.SIGN -> CaptureMode.SIGN
+            else -> CaptureMode.SCAN
+        }
+        startScan(mode, then = tool.takeIf { mode == CaptureMode.SCAN })
+    }
+
+    /** Picker shortcut: import a file, then carry on with [tool] on it. */
+    internal fun importFor(tool: Tool) {
+        picking = null
+        then = tool
+        launchFiles()
+    }
+
+    /**
+     * Runs [tool] on [doc] once the task that made the document has finished: the busy overlay takes one
+     * task at a time and drops one started while another runs.
+     */
+    private fun performAfter(tool: Tool, doc: DocumentEntity) {
+        scope.launch {
+            snapshotFlow { busy.message }.first { it == null }
+            perform(tool, listOf(doc))
+        }
+    }
+
+    /** Whether [tool] can work on [doc] (the picker lists only these). */
+    internal fun accepts(tool: Tool, doc: DocumentEntity): Boolean = when {
+        doc.isWord -> tool !in SCAN_ONLY && tool != Tool.TO_WORD && tool != Tool.MERGE_FILES
+        doc.isExcel -> tool !in SCAN_ONLY && tool != Tool.TO_WORD && tool != Tool.MERGE_FILES
+        else -> true
+    }
+
+    // ---- compress, page numbers, codes -------------------------------------------------------------
+
+    /** About how large the document's PDF is at [quality] (see [compress]). */
+    internal suspend fun compressedSize(doc: DocumentEntity, quality: ExportQuality): Long =
+        exporter.estimatePdfBytes(repo.getPages(doc.id), quality, shrinkPdfPages = quality != ExportQuality.HIGH)
+
+    /**
+     * Makes the PDF at [quality] and shares it, or saves it where the user picks ([save]). Below original
+     * quality, pages imported from a PDF become pictures when that is smaller, so the result never grows.
+     */
+    internal fun compress(doc: DocumentEntity, quality: ExportQuality, save: Boolean) {
+        compressFor = null
+        val build: suspend () -> File = {
+            val size = context.app.settings.current().pdfPageSize
+            exporter.pdf(doc.title, repo.getPages(doc.id), size, quality, shrinkPdfPages = quality != ExportQuality.HIGH)
+        }
+        if (save) {
+            pendingSave = build
+            launchSavePdf(Exporter.safeName(doc.title) + ".pdf")
+        } else {
+            busy.run(S.str(R.string.compressing)) { Sharing.share(context, listOf(build()), "application/pdf", doc.title) }
+        }
+    }
+
+    internal fun onSaveTarget(uri: Uri?) {
+        val build = pendingSave
+        pendingSave = null
+        if (uri == null || build == null) return
+        busy.run(S.str(R.string.compressing)) {
+            val pdf = build()
+            withContext(Dispatchers.IO) {
+                val out = context.contentResolver.openOutputStream(uri) ?: error(S.str(R.string.something_went_wrong))
+                out.use { stream -> pdf.inputStream().use { it.copyTo(stream) } }
+            }
+            context.toast(S.str(R.string.saved_pdf_x, size(pdf.length())))
+        }
+    }
+
+    internal fun pageNumbers(doc: DocumentEntity, start: Int, place: PageComposer.NumberPlace, style: NumberStyle) {
+        numbersFor = null
+        busy.run(S.str(R.string.adding_page_numbers)) {
+            repo.stampPageNumbers(doc.id, start, place) { number, count -> style.text(number, start + count - 1) }
+            nav.openDocument(doc.id)
+        }
+    }
+
+    /** Shows [value] as a QR code and keeps it in the code history. */
+    internal fun createCode(value: String) {
+        creatingCode = false
+        if (value.isBlank()) return
+        codeShown = value
+        scope.launch { repo.addQr(value, barcodeFormatName(Barcode.FORMAT_QR_CODE)) }
+    }
+
+    internal fun shareCode(value: String) = busy.run(S.str(R.string.preparing)) {
+        val file = withContext(Dispatchers.IO) {
+            val code = QrCodes.bitmap(value, 1024) ?: error(S.str(R.string.too_long_for_a_qr_code))
+            val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+            File(dir, "qr-code.png").also { f -> f.outputStream().use { code.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+        }
+        Sharing.share(context, listOf(file), "image/png")
     }
 
     internal fun onPdfPicked(uri: Uri?) {
@@ -396,6 +522,16 @@ class ToolRunner internal constructor(
         }
     }
 
+    /** An .xlsx file opened with the app becomes an Excel document in the library. */
+    internal suspend fun importXlsx(uri: Uri): Long {
+        val title = PdfImporter.displayName(context, uri)?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: repo.defaultTitle(S.str(R.string.excel))
+        return try {
+            repo.importXlsx(uri, title)
+        } catch (e: XlsxReader.NotExcelException) {
+            throw IllegalStateException(e.message)
+        }
+    }
+
     /** Share sheet "Share as Word": converts the scan and shares the .docx without keeping a copy. */
     fun shareAsWord(doc: DocumentEntity) = runOnUnlocked(doc) {
         busy.run(S.str(R.string.converting_to_word)) {
@@ -408,16 +544,17 @@ class ToolRunner internal constructor(
         }
     }
 
-    /** Shares a scan as PDF, or a Word document as its .docx. */
+    /** Shares a scan as PDF, a Word document as its .docx, or an Excel document as its .xlsx. */
     fun sharePdf(doc: DocumentEntity) = runOnUnlocked(doc) {
-        val wordPath = doc.wordPath
-        if (wordPath != null) {
+        val filePath = doc.wordPath ?: doc.excelPath
+        if (filePath != null) {
             busy.run(S.str(R.string.preparing)) {
+                val ext = if (doc.isWord) ".docx" else ".xlsx"
                 val file = withContext(Dispatchers.IO) {
                     val dir = File(context.cacheDir, "exports").apply { mkdirs() }
-                    File(wordPath).copyTo(File(dir, Exporter.safeName(doc.title) + ".docx"), overwrite = true)
+                    File(filePath).copyTo(File(dir, Exporter.safeName(doc.title) + ext), overwrite = true)
                 }
-                Sharing.share(context, listOf(file), DOCX_MIME, doc.title)
+                Sharing.share(context, listOf(file), if (doc.isWord) DOCX_MIME else XlsxWriter.MIME, doc.title)
             }
             return@runOnUnlocked
         }
@@ -464,10 +601,18 @@ class ToolRunner internal constructor(
         if (bytes >= 1_000_000) "%.1f MB".format(bytes / 1_000_000.0) else "${bytes / 1000} KB"
 }
 
-/** Tools that work on scanned pages, not on Word documents. */
+/** Tools that work on scanned pages, not on Word or Excel documents. */
 private val SCAN_ONLY = setOf(
-    Tool.TIMESTAMP, Tool.TO_EXCEL, Tool.SIGN, Tool.ADD_WATERMARK, Tool.EXTRACT_PAGES, Tool.REORDER_PAGES, Tool.COMPRESS, Tool.PRINT,
+    Tool.TIMESTAMP, Tool.TO_EXCEL, Tool.SIGN, Tool.ADD_WATERMARK, Tool.EXTRACT_PAGES, Tool.REORDER_PAGES, Tool.PAGE_NUMBERS,
+    Tool.COMPRESS, Tool.PRINT,
 )
+
+/** How a page number is written. */
+enum class NumberStyle(val text: (number: Int, last: Int) -> String) {
+    PLAIN({ n, _ -> "$n" }),
+    OF_LAST({ n, last -> "$n / $last" }),
+    DASHES({ n, _ -> "- $n -" }),
+}
 
 /** A Word (.docx) file, by type or, when the provider gives no type, by name. */
 fun isDocx(context: Context, uri: Uri): Boolean {
@@ -476,6 +621,15 @@ fun isDocx(context: Context, uri: Uri): Boolean {
     if (type != null && type != "application/octet-stream" && type != "application/zip") return false
     val name = PdfImporter.displayName(context, uri) ?: uri.lastPathSegment ?: return false
     return name.endsWith(".docx", ignoreCase = true)
+}
+
+/** An Excel (.xlsx) file, by type or, when the provider gives no type, by name. */
+fun isXlsx(context: Context, uri: Uri): Boolean {
+    val type = context.contentResolver.getType(uri)
+    if (type == XlsxWriter.MIME) return true
+    if (type != null && type != "application/octet-stream" && type != "application/zip") return false
+    val name = PdfImporter.displayName(context, uri) ?: uri.lastPathSegment ?: return false
+    return name.endsWith(".xlsx", ignoreCase = true)
 }
 
 @Composable
@@ -487,10 +641,12 @@ fun rememberToolRunner(nav: ToolNavigator): ToolRunner {
     runner.nav = nav
     runner.scan = rememberDocumentScanner { runner.onScanned(it) }
     val images = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { runner.onImagesPicked(it) }
-    val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { runner.onFilesPicked(it) }
+    val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { runner.onFilesPicked(it, fromPicker = true) }
+    val savePdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { runner.onSaveTarget(it) }
+    runner.launchSavePdf = { savePdf.launch(it) }
     val pdf = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { runner.onPdfPicked(it) }
     runner.launchImages = { images.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
-    runner.launchFiles = { files.launch(arrayOf("application/pdf", "image/*", DOCX_MIME)) }
+    runner.launchFiles = { files.launch(arrayOf("application/pdf", "image/*", DOCX_MIME, XlsxWriter.MIME)) }
     runner.launchPdf = { pdf.launch(arrayOf("application/pdf")) }
     return runner
 }
@@ -516,8 +672,12 @@ fun ToolRunnerHost(runner: ToolRunner) {
         DocumentPickerDialog(
             title = if (tool == Tool.MERGE_FILES) S.str(R.string.choose_documents_to_merge_in_order) else S.str(R.string.x_choose_a_document, tool.label),
             multiple = tool == Tool.MERGE_FILES,
+            accepts = { runner.accepts(tool, it) },
             onDismiss = { runner.picking = null },
             onPicked = { runner.runOn(tool, it) },
+            // Merging needs documents that are already there; Lock a new scan makes no sense either.
+            onScanNew = if (tool == Tool.MERGE_FILES || tool == Tool.LOCK) null else ({ runner.scanFor(tool) }),
+            onImport = if (tool == Tool.MERGE_FILES || tool == Tool.LOCK) null else ({ runner.importFor(tool) }),
         )
     }
     runner.textResult?.let { result ->
@@ -529,6 +689,10 @@ fun ToolRunnerHost(runner: ToolRunner) {
         )
     }
     runner.qrResult?.let { (value, format) -> QrResultDialog(value, format) { runner.qrResult = null } }
+    runner.compressFor?.let { doc -> CompressDialog(doc, runner) }
+    runner.numbersFor?.let { doc -> PageNumbersDialog(doc, runner) }
+    if (runner.creatingCode) CreateCodeDialog(runner)
+    runner.codeShown?.let { value -> CodeImageDialog(value, runner) }
     runner.watermarkFor?.let { id ->
         TextInputDialog(S.str(R.string.add_watermark_2), "", S.str(R.string.watermark_text), S.str(R.string.apply), onDismiss = { runner.watermarkFor = null }) { runner.watermark(id, it) }
     }
@@ -559,66 +723,4 @@ fun ToolRunnerHost(runner: ToolRunner) {
         }
     }
     BusyOverlay(runner.busy)
-}
-
-@Composable
-private fun DocumentPickerDialog(
-    title: String,
-    multiple: Boolean,
-    onDismiss: () -> Unit,
-    onPicked: (List<DocumentEntity>) -> Unit,
-) {
-    val repo = LocalContext.current.app.repository
-    val docs by remember { repo.observeDocuments("", null) }.collectAsStateWithLifecycle(initialValue = emptyList())
-    var chosen by remember { mutableStateOf(listOf<Long>()) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            if (docs.isEmpty()) {
-                Text(S.str(R.string.no_documents_yet_scan_or_import_something_fi))
-            } else {
-                LazyColumn(Modifier.heightIn(max = 440.dp)) {
-                    items(docs, key = { it.document.id }) { summary ->
-                        val id = summary.document.id
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    if (multiple) chosen = if (id in chosen) chosen - id else chosen + id
-                                    else onPicked(listOf(summary.document))
-                                }
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            DocumentThumbnail(summary, Modifier.width(40.dp).height(52.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(summary.document.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(
-                                    S.str(R.string.x_x_p, formatDate(summary.document.updatedAt), summary.pageCount),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (multiple) {
-                                val order = chosen.indexOf(id)
-                                if (order >= 0) Text("${order + 1}", color = MaterialTheme.colorScheme.primary)
-                                Checkbox(checked = order >= 0, onCheckedChange = null)
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            if (multiple) {
-                TextButton(
-                    enabled = chosen.size >= 2,
-                    onClick = { onPicked(chosen.mapNotNull { id -> docs.firstOrNull { it.document.id == id }?.document }) },
-                ) { Text(S.str(R.string.merge_x, chosen.size)) }
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(S.str(R.string.cancel)) } },
-    )
 }

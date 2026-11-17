@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PointF
+import com.paperlens.app.runLogged
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.acos
@@ -58,9 +59,9 @@ object DocumentDetector {
      * the rest. When the model and the paper outline agree, the model's corners get the paper's curl.
      */
     fun detectOutline(src: Bitmap): PageOutline? {
-        val found = runCatching { CornerModel.detectPass(src) }.getOrNull()
+        val found = runLogged("DocumentDetector", "Corner model") { CornerModel.detectPass(src) }.getOrNull()
         val learned = found?.corners?.let(::order)?.takeIf { plausible(it, src.width, src.height) }
-        val paper = runCatching { PageFinder.find(src) }.getOrNull()
+        val paper = runLogged("DocumentDetector", "Paper finder") { PageFinder.find(src) }.getOrNull()
         // The model calls the whole photo the page for screenshots and photos of a screen; a smaller page
         // the paper finder sees inside it is the better crop.
         if (learned != null && paper != null && fillsPhoto(learned, src.width, src.height) && !fillsPhoto(paper.corners, src.width, src.height)) {
@@ -123,7 +124,7 @@ object DocumentDetector {
         }
         val blurred = blur(gray, w, h, 1.6)
         val edges = edges(blurred, w, h)
-        val dilated = dilate(dilate(edges, w, h), w, h)
+        val photo = EdgePhoto(w, h, blurred, dilate(dilate(edges, w, h), w, h))
         val lines = hough(edges, w, h)
 
         val horizontal = lines.filter { abs(Math.toDegrees(it.theta) - 90) < 40 }.toMutableList()
@@ -133,76 +134,88 @@ object DocumentDetector {
         vertical += Line(0.0, 0.0, true)
         vertical += Line((w - 1).toDouble(), 0.0, true)
 
-        val imgArea = (w * h).toFloat()
-        var best: List<PointF>? = null
-        var bestScore = 0f
-        var bestSupport = 0f
-        var bestContrast = 0f
-        for (i in horizontal.indices) for (j in i + 1 until horizontal.size) {
-            for (k in vertical.indices) for (m in k + 1 until vertical.size) {
-                val pts = listOf(
-                    intersect(horizontal[i], vertical[k]),
-                    intersect(horizontal[i], vertical[m]),
-                    intersect(horizontal[j], vertical[m]),
-                    intersect(horizontal[j], vertical[k]),
-                )
-                if (pts.any { it == null }) continue
-                val raw = pts.filterNotNull()
-                if (raw.any { it.x < -0.03f * w || it.x > 1.03f * w || it.y < -0.03f * h || it.y > 1.03f * h }) continue
-                val q = order(raw)
-                val area = polygonArea(q)
-                if (area < 0.12f * imgArea || area > 0.985f * imgArea) continue
-                val angles = cornerAngles(q)
-                if (angles.min() < 50f || angles.max() > 130f) continue
-
-                val cx = q.map { it.x }.average().toFloat()
-                val cy = q.map { it.y }.average().toFloat()
-                var support = 0f
-                var contrast = 0f
-                var borders = 0
-                var weakest = 1f
-                var ok = true
-                for (s in 0 until 4) {
-                    val a = q[s]
-                    val b = q[(s + 1) % 4]
-                    if (onBorder(a, b, w, h)) {
-                        borders++
-                        support += 0.6f
-                        contrast += 0.6f
-                        continue
-                    }
-                    val sp = sideSupport(dilated, w, h, a, b)
-                    val cs = sideContrast(blurred, w, h, a, b, cx, cy)
-                    if (cs == null || sp < 0.35f || cs < 0.45f) {
-                        ok = false
-                        break
-                    }
-                    support += sp
-                    contrast += cs
-                    weakest = min(weakest, min(sp, cs))
-                }
-                if (!ok || borders > 3) continue
-                support /= 4f
-                contrast /= 4f
-                val frac = area / imgArea
-                // A page cut off by the photo edge is close to the camera, so it is never small; a small box
-                // touching the edge is usually packaging or clutter in a busy scene.
-                if (borders > 0 && frac < 0.25f) continue
-                // A page filling the photo except for one or two strips (desk, hand, lap at the bottom), as
-                // a scanner app crops it: only with large coverage and clean, high-contrast real sides.
-                if (borders > 1 && (frac < 0.7f || weakest < 0.7f)) continue
-                val score = support * contrast * (0.45f + 0.55f * sqrt(area / imgArea))
-                if (score > bestScore) {
-                    bestScore = score
-                    best = q
-                    bestSupport = support
-                    bestContrast = contrast
-                }
-            }
-        }
-        if (best == null || bestSupport < 0.6f || bestContrast < 0.6f || bestScore < 0.3f) return null
-        return best.map {
+        // The first of equally good candidates wins (maxByOrNull keeps the first maximum).
+        val best = quadCandidates(horizontal, vertical).mapNotNull { photo.score(it) }.maxByOrNull { it.score }
+        if (best == null || best.support < 0.6f || best.contrast < 0.6f || best.score < 0.3f) return null
+        return best.quad.map {
             PointF((it.x / scale).coerceIn(0f, src.width.toFloat()), (it.y / scale).coerceIn(0f, src.height.toFloat()))
+        }
+    }
+
+    /** Every quadrilateral made of two "horizontal" and two "vertical" lines (corners unordered; null = parallel). */
+    private fun quadCandidates(horizontal: List<Line>, vertical: List<Line>): Sequence<List<PointF?>> = sequence {
+        for ((top, bottom) in pairs(horizontal)) for ((left, right) in pairs(vertical)) {
+            yield(listOf(intersect(top, left), intersect(top, right), intersect(bottom, right), intersect(bottom, left)))
+        }
+    }
+
+    /** Every pair of different items, in list order. */
+    private fun <T> pairs(items: List<T>): Sequence<Pair<T, T>> = sequence {
+        for (i in items.indices) for (j in i + 1 until items.size) yield(items[i] to items[j])
+    }
+
+    /** A candidate page outline with how well the photo supports it. */
+    private class ScoredQuad(val quad: List<PointF>, val score: Float, val support: Float, val contrast: Float)
+
+    /** How well the four sides of a quadrilateral are backed by the photo (see [EdgePhoto.sides]). */
+    private class SideEvidence(val support: Float, val contrast: Float, val borders: Int, val weakest: Float)
+
+    /** The small working copy of a photo that candidates are checked against. */
+    private class EdgePhoto(val w: Int, val h: Int, val blurred: FloatArray, val dilated: BooleanArray) {
+        private val area = (w * h).toFloat()
+
+        /** [corners] as a scored page outline, or null when it cannot be one (shape, size or weak sides). */
+        fun score(corners: List<PointF?>): ScoredQuad? {
+            if (corners.any { it == null }) return null
+            val raw = corners.filterNotNull()
+            if (raw.any { it.x < -0.03f * w || it.x > 1.03f * w || it.y < -0.03f * h || it.y > 1.03f * h }) return null
+            val q = order(raw)
+            val quadArea = polygonArea(q)
+            if (quadArea < 0.12f * area || quadArea > 0.985f * area) return null
+            val angles = cornerAngles(q)
+            if (angles.min() < 50f || angles.max() > 130f) return null
+
+            val sides = sides(q) ?: return null
+            if (sides.borders > 3) return null
+            val frac = quadArea / area
+            // A page cut off by the photo edge is close to the camera, so it is never small; a small box
+            // touching the edge is usually packaging or clutter in a busy scene.
+            if (sides.borders > 0 && frac < 0.25f) return null
+            // A page filling the photo except for one or two strips (desk, hand, lap at the bottom), as
+            // a scanner app crops it: only with large coverage and clean, high-contrast real sides.
+            if (sides.borders > 1 && (frac < 0.7f || sides.weakest < 0.7f)) return null
+            val score = sides.support * sides.contrast * (0.45f + 0.55f * sqrt(quadArea / area))
+            return ScoredQuad(q, score, sides.support, sides.contrast)
+        }
+
+        /**
+         * Mean edge support and brightness contrast of the four sides, or null when a real side (one not on
+         * the photo border) has too little of either. Border sides count as moderately good.
+         */
+        private fun sides(q: List<PointF>): SideEvidence? {
+            val cx = q.map { it.x }.average().toFloat()
+            val cy = q.map { it.y }.average().toFloat()
+            var support = 0f
+            var contrast = 0f
+            var borders = 0
+            var weakest = 1f
+            for (s in 0 until 4) {
+                val a = q[s]
+                val b = q[(s + 1) % 4]
+                if (onBorder(a, b, w, h)) {
+                    borders++
+                    support += 0.6f
+                    contrast += 0.6f
+                    continue
+                }
+                val sp = sideSupport(dilated, w, h, a, b)
+                val cs = sideContrast(blurred, w, h, a, b, cx, cy)
+                if (cs == null || sp < 0.35f || cs < 0.45f) return null
+                support += sp
+                contrast += cs
+                weakest = min(weakest, min(sp, cs))
+            }
+            return SideEvidence(support / 4f, contrast / 4f, borders, weakest)
         }
     }
 
@@ -423,19 +436,22 @@ object DocumentDetector {
         val kernel = FloatArray(2 * radius + 1) { i -> exp(-((i - radius) * (i - radius)) / (2 * sigma * sigma)).toFloat() }
         val sum = kernel.sum()
         for (i in kernel.indices) kernel[i] /= sum
-        val tmp = FloatArray(w * h)
+        val acrossRows = FloatArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) acrossRows[y * w + x] = weighted(src, w, h, x, y, kernel, alongX = true)
         val out = FloatArray(w * h)
-        for (y in 0 until h) for (x in 0 until w) {
-            var acc = 0f
-            for (k in -radius..radius) acc += src[y * w + (x + k).coerceIn(0, w - 1)] * kernel[k + radius]
-            tmp[y * w + x] = acc
-        }
-        for (y in 0 until h) for (x in 0 until w) {
-            var acc = 0f
-            for (k in -radius..radius) acc += tmp[(y + k).coerceIn(0, h - 1) * w + x] * kernel[k + radius]
-            out[y * w + x] = acc
-        }
+        for (y in 0 until h) for (x in 0 until w) out[y * w + x] = weighted(acrossRows, w, h, x, y, kernel, alongX = false)
         return out
+    }
+
+    /** The [kernel]-weighted sum of the pixels around (x, y) along one axis; the border pixel repeats outside. */
+    private fun weighted(src: FloatArray, w: Int, h: Int, x: Int, y: Int, kernel: FloatArray, alongX: Boolean): Float {
+        val radius = kernel.size / 2
+        var acc = 0f
+        for (k in -radius..radius) {
+            val i = if (alongX) y * w + (x + k).coerceIn(0, w - 1) else (y + k).coerceIn(0, h - 1) * w + x
+            acc += src[i] * kernel[k + radius]
+        }
+        return acc
     }
 
     /** Canny-style edge map: Sobel, non-maximum suppression, hysteresis (85th percentile high threshold). */
@@ -501,26 +517,41 @@ object DocumentDetector {
         val rows = 2 * diag
         val acc = IntArray(rows * THETAS)
         for (y in 0 until h) for (x in 0 until w) {
-            if (!edge[y * w + x]) continue
-            for (t in 0 until THETAS) {
-                val r = (x * cosT[t] + y * sinT[t]).roundToInt() + diag
-                acc[r * THETAS + t]++
-            }
+            if (edge[y * w + x]) voteForLinesThrough(x, y, acc, diag)
         }
         val minVotes = max(20, (0.12 * min(w, h)).toInt())
         val lines = ArrayList<Line>()
         repeat(MAX_LINES) {
-            var bestI = 0
-            for (i in acc.indices) if (acc[i] > acc[bestI]) bestI = i
-            if (acc[bestI] < minVotes) return lines
-            val r = bestI / THETAS
-            val t = bestI % THETAS
+            val strongest = indexOfMax(acc)
+            if (acc[strongest] < minVotes) return lines
+            val r = strongest / THETAS
+            val t = strongest % THETAS
             lines += Line((r - diag).toDouble(), t * PI / THETAS)
-            for (rr in max(0, r - 10)..min(rows - 1, r + 10)) {
-                for (dt in -6..6) acc[rr * THETAS + Math.floorMod(t + dt, THETAS)] = 0
-            }
+            clearVotesNear(r, t, acc, rows)
         }
         return lines
+    }
+
+    /** An edge pixel votes for every line (distance, angle) that passes through it. */
+    private fun voteForLinesThrough(x: Int, y: Int, acc: IntArray, diag: Int) {
+        for (t in 0 until THETAS) {
+            val r = (x * cosT[t] + y * sinT[t]).roundToInt() + diag
+            acc[r * THETAS + t]++
+        }
+    }
+
+    /** Index of the largest value (the first one when several are equal). */
+    private fun indexOfMax(values: IntArray): Int {
+        var best = 0
+        for (i in values.indices) if (values[i] > values[best]) best = i
+        return best
+    }
+
+    /** Removes the votes around a found line, so its near-duplicates are not found again. */
+    private fun clearVotesNear(r: Int, t: Int, acc: IntArray, rows: Int) {
+        for (rr in max(0, r - 10)..min(rows - 1, r + 10)) {
+            for (dt in -6..6) acc[rr * THETAS + Math.floorMod(t + dt, THETAS)] = 0
+        }
     }
 
     private fun intersect(a: Line, b: Line): PointF? {

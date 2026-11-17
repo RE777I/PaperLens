@@ -105,7 +105,7 @@ private fun Banner() {
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Text(S.str(R.string.snap_toolkit), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = Color(0xFF14213D))
+                    Text(S.str(R.string.toolkit), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = Color(0xFF14213D))
                     Text(
                         S.str(R.string.scan_convert_and_edit_documents_everything_r),
                         style = MaterialTheme.typography.bodyMedium,

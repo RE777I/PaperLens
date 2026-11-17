@@ -10,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.paperlens.app.app
+import com.paperlens.app.ui.excel.ExcelScreen
 import com.paperlens.app.ui.word.WordScreen
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
@@ -120,14 +121,19 @@ fun PaperLensNavHost(externalRequest: ExternalRequest?, onExternalRequestHandled
         }
         composable(Routes.DOCUMENT, arguments = listOf(navArgument("documentId") { type = NavType.LongType })) { entry ->
             val documentId = entry.arguments!!.getLong("documentId")
-            // Word documents (converted with To Word, or imported .docx files) open in the Word editor.
+            // Word documents (converted with To Word, or imported .docx files) open in the Word editor,
+            // Excel documents (To Excel, imported .xlsx files) in the sheet viewer.
             val context = LocalContext.current
-            var isWord by remember(documentId) { mutableStateOf<Boolean?>(null) }
-            LaunchedEffect(documentId) { isWord = context.app.repository.getDocument(documentId)?.isWord == true }
-            when (isWord) {
+            var kind by remember(documentId) { mutableStateOf<String?>(null) }
+            LaunchedEffect(documentId) {
+                val doc = context.app.repository.getDocument(documentId)
+                kind = when { doc?.isWord == true -> "word"; doc?.isExcel == true -> "excel"; else -> "scan" }
+            }
+            when (kind) {
                 null -> Box(Modifier.fillMaxSize())
-                true -> WordScreen(documentId = documentId, onBack = { nav.popBackStack() })
-                false -> DocumentScreen(
+                "word" -> WordScreen(documentId = documentId, onBack = { nav.popBackStack() })
+                "excel" -> ExcelScreen(documentId = documentId, onBack = { nav.popBackStack() })
+                else -> DocumentScreen(
                 documentId = documentId,
                 nav = toolNavigator(nav),
                 onBack = { nav.popBackStack() },

@@ -21,6 +21,8 @@ import androidx.compose.material.icons.filled.DriveFolderUpload
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Numbers
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -77,11 +79,13 @@ enum class Tool(private val labelRes: Int, val icon: ImageVector, val tint: Colo
     MERGE_FILES(R.string.merge_files, Icons.AutoMirrored.Filled.MergeType, Blue, ToolSection.EDIT),
     EXTRACT_PAGES(R.string.extract_pages, Icons.Filled.ContentCut, Orange, ToolSection.EDIT),
     REORDER_PAGES(R.string.reorder_pages, Icons.Filled.SwapVert, Blue, ToolSection.EDIT),
+    PAGE_NUMBERS(R.string.page_numbers, Icons.Filled.Numbers, Orange, ToolSection.EDIT),
     LOCK(R.string.lock, Icons.Filled.Lock, Green, ToolSection.EDIT),
     COMPRESS(R.string.compress, Icons.Filled.Compress, Blue, ToolSection.EDIT),
 
     PRINT(R.string.print, Icons.Filled.Print, Teal, ToolSection.UTILITIES),
     SCAN_CODE(R.string.scan_code, Icons.Filled.QrCodeScanner, Teal, ToolSection.UTILITIES),
+    CREATE_CODE(R.string.create_code, Icons.Filled.QrCode2, Green, ToolSection.UTILITIES),
     CODE_HISTORY(R.string.code_history_2, Icons.Filled.History, Blue, ToolSection.UTILITIES),
     ;
     val label: String get() = S.str(labelRes)

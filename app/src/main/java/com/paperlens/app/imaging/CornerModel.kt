@@ -14,6 +14,7 @@ import android.net.Uri
 import android.util.Log
 import com.paperlens.app.R
 import com.paperlens.app.S
+import com.paperlens.app.runLogged
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
@@ -59,7 +60,7 @@ data class CornerModelInfo(
             name = o.getString("name"),
             bytes = o.optLong("bytes"),
             builtIn = false,
-            output = runCatching { CornerOutput.valueOf(o.getString("output")) }.getOrDefault(CornerOutput.HEATMAPS),
+            output = runLogged("CornerModel", "Output kind of an imported model") { CornerOutput.valueOf(o.getString("output")) }.getOrDefault(CornerOutput.HEATMAPS),
             inputWidth = o.optInt("w", 256),
             inputHeight = o.optInt("h", 256),
             channelsLast = o.optBoolean("nhwc"),
@@ -499,7 +500,7 @@ object CornerModel {
 
     private fun readIndex(context: Context): JSONObject {
         val f = File(File(context.filesDir, DIR), INDEX)
-        return runCatching { JSONObject(f.readText()) }.getOrElse { JSONObject() }
+        return runLogged("CornerModel", "Reading the model list") { JSONObject(f.readText()) }.getOrElse { JSONObject() }
     }
 
     private fun writeIndex(context: Context, o: JSONObject) {
@@ -511,6 +512,6 @@ object CornerModel {
 
     private fun imported(context: Context): List<CornerModelInfo> {
         val list = readIndex(context).optJSONArray("imported") ?: return emptyList()
-        return (0 until list.length()).mapNotNull { runCatching { CornerModelInfo.fromJson(list.getJSONObject(it)) }.getOrNull() }
+        return (0 until list.length()).mapNotNull { runLogged("CornerModel", "An imported model's entry") { CornerModelInfo.fromJson(list.getJSONObject(it)) }.getOrNull() }
     }
 }

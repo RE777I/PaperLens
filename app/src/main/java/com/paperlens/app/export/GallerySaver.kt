@@ -30,7 +30,10 @@ object GallerySaver {
                 resolver.openInputStream(source)?.use { input -> resolver.openOutputStream(target)?.use { input.copyTo(it) } }
                 resolver.update(target, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
                 saved++
-            }.onFailure { resolver.delete(target, null, null) }
+            }.onFailure {
+                android.util.Log.w("GallerySaver", "Saving page ${i + 1} to the gallery", it)
+                resolver.delete(target, null, null)
+            }
         }
         saved
     }

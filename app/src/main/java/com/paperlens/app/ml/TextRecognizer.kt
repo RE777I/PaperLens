@@ -20,6 +20,7 @@ import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.paperlens.app.runLogged
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
@@ -105,7 +106,7 @@ object Ocr {
         var bestScore = score(latin)
         var bestScript = OcrScript.LATIN
         for (s in ready) {
-            val text = runCatching { read(context, input, s, wait = false) }.getOrNull() ?: continue
+            val text = runLogged("Ocr", "Reading with the $s model") { read(context, input, s, wait = false) }.getOrNull() ?: continue
             val own = text.textBlocks.sumOf { b -> b.text.count(s::owns) }
             val sc = score(text)
             if (own >= OWN_CHARS && sc >= bestScore * 1.05f) {
@@ -142,7 +143,7 @@ object Ocr {
         if (script == OcrScript.LATIN || script == OcrScript.AUTO) return true
         val recognizer = TextRecognition.getClient(script.options())
         return try {
-            runCatching { ModuleInstall.getClient(context).areModulesAvailable(recognizer).await().areModulesAvailable() }.getOrDefault(false)
+            runLogged("Ocr", "Checking whether a text model is installed") { ModuleInstall.getClient(context).areModulesAvailable(recognizer).await().areModulesAvailable() }.getOrDefault(false)
         } finally {
             recognizer.close()
         }
@@ -154,7 +155,10 @@ object Ocr {
         runCatching {
             ModuleInstall.getClient(context).installModules(ModuleInstallRequest.newBuilder().addApi(recognizer).build())
                 .addOnCompleteListener { recognizer.close() }
-        }.onFailure { recognizer.close() }
+        }.onFailure {
+            android.util.Log.w("Ocr", "Requesting a text model download", it)
+            recognizer.close()
+        }
     }
 
     /** A non-Latin reading must contain at least this many characters of its own script to win. */

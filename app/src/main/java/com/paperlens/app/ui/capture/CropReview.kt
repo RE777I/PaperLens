@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.paperlens.app.imaging.DocumentDetector
 import com.paperlens.app.imaging.PageOutline
+import com.paperlens.app.runLogged
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.atan2
@@ -116,7 +117,7 @@ fun CropReview(
     var snap by remember { mutableStateOf(CropSnap(fullWidth.toFloat(), fullHeight.toFloat(), full, borders(full))) }
     LaunchedEffect(preview, detected) {
         val f = fullWidth.toFloat() / preview.width
-        val found = withContext(Dispatchers.Default) { runCatching { DocumentDetector.guides(preview) }.getOrNull() }
+        val found = withContext(Dispatchers.Default) { runLogged("CropReview", "Finding snap guides") { DocumentDetector.guides(preview) }.getOrNull() }
         fun up(p: PointF) = PointF(p.x * f, p.y * f)
         val points = full + (detected?.corners ?: emptyList()) + (found?.corners?.map(::up) ?: emptyList())
         val edges = borders(full) + (detected?.corners?.let(::borders) ?: emptyList()) +

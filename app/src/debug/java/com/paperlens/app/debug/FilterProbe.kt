@@ -41,6 +41,25 @@ class FilterProbe : BroadcastReceiver() {
                     Log.i(TAG, "done")
                     return@thread
                 }
+                if (intent.getStringExtra("mode") == "excel") {
+                    // To Excel on each photo in files/probe/excel (plus the old converter as a baseline).
+                    val script = intent.getStringExtra("script")?.let { OcrScript.valueOf(it) } ?: OcrScript.AUTO
+                    val outDir = File(dir, "excelout").apply { mkdirs() }
+                    File(dir, "excel").listFiles { f -> f.name.endsWith(".jpg") }?.sortedBy { it.name }?.forEach { file ->
+                        val started = System.currentTimeMillis()
+                        try {
+                            // <name>.script next to a photo picks its OCR script (CHINESE…).
+                            val own = File(file.parentFile, file.nameWithoutExtension + ".script").takeIf { it.exists() }
+                                ?.readText()?.trim()?.let { OcrScript.valueOf(it) }
+                            runBlocking { ExcelProbe.convert(app, file, outDir, own ?: script) }
+                            Log.i(TAG, "excel ${file.name} ${System.currentTimeMillis() - started} ms")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "excel ${file.name} failed", e)
+                        }
+                    }
+                    Log.i(TAG, "done")
+                    return@thread
+                }
                 if (intent.getStringExtra("mode") == "ocrscore") {
                     // How each script's OCR reads each page: for tuning automatic language choice.
                     File(dir, "word").listFiles { f -> f.name.endsWith(".jpg") }?.sortedBy { it.name }?.forEach { file ->

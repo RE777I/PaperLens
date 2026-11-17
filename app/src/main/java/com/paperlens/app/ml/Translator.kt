@@ -8,6 +8,7 @@ import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.TranslateRemoteModel
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
+import com.paperlens.app.runLogged
 import kotlinx.coroutines.tasks.await
 import java.util.Locale
 
@@ -74,7 +75,7 @@ object DocTranslator {
      */
     suspend fun translateAll(texts: List<String>, sourceTag: String, targetTag: String, onProgress: (String) -> Unit = {}): List<String> {
         if (sourceTag == targetTag) throw Failure("The text is already in ${displayName(targetTag)}.")
-        val have = runCatching { downloaded() }.getOrDefault(emptySet())
+        val have = runLogged("Translator", "Listing downloaded languages") { downloaded() }.getOrDefault(emptySet())
         val missing = listOf(sourceTag, targetTag).filter { it !in have }
         if (missing.isNotEmpty()) {
             onProgress("Downloading ${missing.joinToString(" and ") { displayName(it) }} (first time only)…")

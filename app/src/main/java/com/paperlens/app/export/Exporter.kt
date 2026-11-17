@@ -10,6 +10,7 @@ import com.paperlens.app.app
 import com.paperlens.app.ml.TextLayout
 import com.paperlens.app.imaging.BitmapUtils
 import com.paperlens.app.imaging.PageComposer
+import com.paperlens.app.runLogged
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
@@ -41,6 +42,7 @@ class Exporter(private val context: Context) {
      * With "Searchable PDF" on (Settings), each scan gets the recognised text hidden behind it
      * ([PdfTextLayer]), so the PDF can be searched and its text copied. Pages imported from a PDF and
      * left unchanged go in as the original PDF page: same quality and text as the file they came from.
+     * With [shrinkPdfPages] (Compress) such a page goes in as a picture instead when that is smaller.
      */
     suspend fun pdf(
         title: String,
@@ -48,6 +50,7 @@ class Exporter(private val context: Context) {
         pageSize: PdfPageSize,
         quality: ExportQuality,
         password: String? = null,
+        shrinkPdfPages: Boolean = false,
     ): File = withContext(Dispatchers.IO) {
         val out = File(exportDir, safeName(title) + ".pdf")
         val settings = context.app.settings.current()
@@ -56,14 +59,18 @@ class Exporter(private val context: Context) {
         PDDocument().use { doc ->
             val textLayer = PdfTextLayer(doc)
             for (page in pages) {
-                val original = page.pdfFile?.let { f -> runCatching { PDDocument.load(f) }.getOrNull() }
+                var jpeg: ByteArray? = null
+                val kept = page.pdfFile?.takeIf { f ->
+                    !shrinkPdfPages || f.length() <= jpegBytes(File(page.imagePath), quality).also { jpeg = it }.size
+                }
+                val original = kept?.let { f -> runLogged("Exporter", "Opening the imported PDF of page ${page.position + 1}") { PDDocument.load(f) }.getOrNull() }
                 if (original != null && original.numberOfPages > 0) {
                     sources += original
                     doc.importPage(original.getPage(0))
                     continue
                 }
                 original?.close()
-                val image = JPEGFactory.createFromByteArray(doc, jpegBytes(File(page.imagePath), quality))
+                val image = JPEGFactory.createFromByteArray(doc, jpeg ?: jpegBytes(File(page.imagePath), quality))
                 val rect = when (pageSize) {
                     PdfPageSize.A4 -> PDRectangle.A4
                     PdfPageSize.LETTER -> PDRectangle.LETTER
@@ -96,6 +103,29 @@ class Exporter(private val context: Context) {
         sources.forEach { it.close() }
         out
     }
+
+    /**
+     * About how large [pdf] would come out (page pictures plus a little per page), without building it.
+     * Compress shows this for each quality before the user picks one.
+     */
+    suspend fun estimatePdfBytes(pages: List<PageEntity>, quality: ExportQuality, shrinkPdfPages: Boolean): Long =
+        withContext(Dispatchers.IO) {
+            val searchable = context.app.settings.current().searchablePdf
+            pages.sumOf { page ->
+                val image = File(page.imagePath)
+                val pdf = page.pdfFile
+                // A page that goes in as a picture also gets its hidden text when Searchable PDF is on.
+                val picture = {
+                    val bytes = if (quality == ExportQuality.HIGH) image.length() else jpegBytes(image, quality).size.toLong()
+                    bytes + if (searchable) (page.ocrText?.length ?: 0) * TEXT_LAYER_BYTES_PER_CHAR else 0L
+                }
+                PAGE_OVERHEAD_BYTES + when {
+                    pdf == null -> picture()
+                    shrinkPdfPages -> min(pdf.length(), picture())
+                    else -> pdf.length()
+                }
+            }
+        }
 
     /** "Export Pages as Separate PDFs": one PDF per page. */
     suspend fun separatePdfs(title: String, pages: List<PageEntity>, pageSize: PdfPageSize, quality: ExportQuality): List<File> =
@@ -174,6 +204,12 @@ class Exporter(private val context: Context) {
 
     companion object {
         private const val A4_WIDTH_PT = 595.28f
+
+        /** Page object, content stream and cross-reference entries around each page picture. */
+        private const val PAGE_OVERHEAD_BYTES = 700L
+
+        /** The hidden text layer writes each word with its position: about this much per character of text. */
+        private const val TEXT_LAYER_BYTES_PER_CHAR = 8L
 
         fun safeName(title: String): String =
             title.replace(Regex("[\\\\/:*?\"<>|\\n\\r]"), "_").trim().take(80).ifBlank { "PaperLens" }

@@ -21,10 +21,16 @@ data class DocumentEntity(
     val folderId: Long? = null,
     /** Word documents: the .docx file (they have no scanned pages). */
     val wordPath: String? = null,
-    /** Word documents: a small picture of the first page for lists. */
+    /** Word and Excel documents: a small picture of the first page / sheet for lists. */
     val wordCover: String? = null,
+    /** Excel documents: the .xlsx file (they have no scanned pages either). */
+    val excelPath: String? = null,
 ) {
     val isWord: Boolean get() = wordPath != null
+    val isExcel: Boolean get() = excelPath != null
+
+    /** A Word or Excel file rather than scanned pages. */
+    val isFile: Boolean get() = isWord || isExcel
 }
 
 @Entity(tableName = "folders")

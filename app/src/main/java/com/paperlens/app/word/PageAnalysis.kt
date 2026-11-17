@@ -1,146 +1,12 @@
 package com.paperlens.app.word
 
 import android.graphics.Bitmap
-import android.graphics.Rect
 import android.graphics.RectF
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
-
-/** One recognised word on the page (bitmap pixels) plus what the pixels say about its look. */
-internal class OcrWord(val text: String, val box: RectF, val confidence: Float, val line: Int) {
-    /** Font size estimate in pixels (em height), shared by the words of a line. */
-    var em = 0f
-    /** Handwritten: shown as a small picture of itself, in its place in the line. */
-    var handwritten = false
-
-    /** Brightness of the ink as on white paper (pencil handwriting is light). */
-    var inkLuma = 0
-
-    /** Typical stroke thickness in pixels. */
-    var stroke = 0f
-    /** Stroke thickness relative to [em]. */
-    var weight = 0f
-    var bold = false
-    /** 0xRRGGBB, or null for black / very dark grey. */
-    var color: Int? = null
-}
-
-/** A straight ruled line: y = a + b·x for horizontal rules, x = a + b·y for vertical ones. */
-internal class Rule(val horizontal: Boolean) {
-    /** Covered stretches along the line, [start, end] pairs in the running coordinate. */
-    val spans = ArrayList<FloatArray>()
-    private var n = 0.0; private var sx = 0.0; private var sy = 0.0; private var sxx = 0.0; private var sxy = 0.0
-    var a = 0f; var b = 0f
-    var thickness = 1f
-    /** Slope imposed for short pieces (the page's skew); kept through merges. */
-    private var fixedSlope: Float? = null
-    var start = Float.MAX_VALUE
-    var end = -Float.MAX_VALUE
-
-    /** Adds a sample: [along] = running coordinate, [across] = position across the line, weighted. */
-    fun add(along: Float, across: Float, weight: Double = 1.0) {
-        n += weight; sx += along * weight; sy += across * weight; sxx += along.toDouble() * along * weight; sxy += along.toDouble() * across * weight
-    }
-
-    fun fit() {
-        fixedSlope?.let { slope ->
-            b = slope
-            if (n > 0) a = ((sy - slope * sx) / n).toFloat()
-            return
-        }
-        val d = n * sxx - sx * sx
-        if (n > 0 && abs(d) > 1e-6 && end - start > 1) {
-            b = ((n * sxy - sx * sy) / d).toFloat().coerceIn(-0.05f, 0.05f)
-            a = ((sy - b * sx) / n).toFloat()
-        } else if (n > 0) {
-            b = 0f
-            a = (sy / n).toFloat()
-        }
-    }
-
-    fun at(along: Float) = a + b * along
-
-    /** Uses [slope] instead of the fitted one (short pieces give unreliable slopes). */
-    fun fixSlope(slope: Float) {
-        fixedSlope = slope
-        fit()
-    }
-
-    fun merge(o: Rule) {
-        n += o.n; sx += o.sx; sy += o.sy; sxx += o.sxx; sxy += o.sxy
-        // A merged rule keeps an imposed slope only while it stays short.
-        if (fixedSlope == null && n == o.n) fixedSlope = o.fixedSlope
-        spans += o.spans
-        start = min(start, o.start); end = max(end, o.end)
-        thickness = max(thickness, o.thickness)
-        fit()
-    }
-
-    /** Fraction of [from, to] covered by this rule's spans. */
-    fun coverage(from: Float, to: Float): Float {
-        if (to <= from) return 1f
-        val parts = spans.mapNotNull { s -> if (s[1] < from || s[0] > to) null else floatArrayOf(max(s[0], from), min(s[1], to)) }
-            .sortedBy { it[0] }
-        var covered = 0f
-        var curS = Float.NaN
-        var curE = Float.NaN
-        for (p in parts) {
-            if (curS.isNaN()) { curS = p[0]; curE = p[1] } else if (p[0] <= curE + 2) curE = max(curE, p[1]) else {
-                covered += curE - curS; curS = p[0]; curE = p[1]
-            }
-        }
-        if (!curS.isNaN()) covered += curE - curS
-        return covered / (to - from)
-    }
-}
-
-/** A table drawn with lines: its row and column rules and the cells (merged ones as spans). */
-internal class GridTable(val rows: List<Rule>, val cols: List<Rule>, val cells: List<GridCell>) {
-    /** Centre of the table (rules are slightly slanted, so positions are read at the centre). */
-    val cx: Float
-    val cy: Float
-
-    init {
-        val x0 = (rows.first().start + rows.first().end) / 2
-        cy = (rows.first().at(x0) + rows.last().at(x0)) / 2
-        cx = (cols.first().at(cy) + cols.last().at(cy)) / 2
-    }
-
-    val box: RectF get() = RectF(
-        min(cols.first().at(rows.first().at(cx)), cols.first().at(rows.last().at(cx))),
-        min(rows.first().at(cols.first().at(cy)), rows.first().at(cols.last().at(cy))),
-        max(cols.last().at(rows.first().at(cx)), cols.last().at(rows.last().at(cx))),
-        max(rows.last().at(cols.first().at(cy)), rows.last().at(cols.last().at(cy))),
-    )
-
-    /** Column rule positions at the table's middle height, and row rule positions at its middle. */
-    fun colX(c: Int) = cols[c].at(cy)
-    fun rowY(r: Int) = rows[r].at(cx)
-
-    /** Grid row and column containing the point, or null when outside. */
-    fun locate(x: Float, y: Float): Pair<Int, Int>? {
-        var row = -1
-        for (r in 0 until rows.size - 1) if (y >= rows[r].at(x) && y < rows[r + 1].at(x)) { row = r; break }
-        var col = -1
-        for (c in 0 until cols.size - 1) if (x >= cols[c].at(y) && x < cols[c + 1].at(y)) { col = c; break }
-        return if (row >= 0 && col >= 0) row to col else null
-    }
-
-    fun cellRect(cell: GridCell): RectF {
-        val midX = (colX(cell.c0) + colX(cell.c1 + 1)) / 2
-        val midY = (rowY(cell.r0) + rowY(cell.r1 + 1)) / 2
-        return RectF(cols[cell.c0].at(midY), rows[cell.r0].at(midX), cols[cell.c1 + 1].at(midY), rows[cell.r1 + 1].at(midX))
-    }
-}
-
-/** A cell region of a [GridTable] in grid units (inclusive). */
-internal data class GridCell(val r0: Int, val c0: Int, val r1: Int, val c1: Int)
-
-/** A borderless table whose rows are shaded bands (alternating grey / white). */
-internal class BandTable(val box: RectF, val rowEdges: FloatArray, val rowShade: Array<Int?>)
 
 /**
  * Pixel-level layout analysis of one page: paper brightness, ink, ruled lines, tables, shaded bands,
@@ -149,7 +15,7 @@ internal class BandTable(val box: RectF, val rowEdges: FloatArray, val rowShade:
 internal class PageAnalysis(val bitmap: Bitmap) {
     val w = bitmap.width
     val h = bitmap.height
-    private val px = IntArray(w * h).also { bitmap.getPixels(it, 0, w, 0, 0, w, h) }
+    internal val px = IntArray(w * h).also { bitmap.getPixels(it, 0, w, 0, 0, w, h) }
     val gray = ByteArray(w * h)
     /** Local paper brightness (text removed), per pixel. */
     val bg = ByteArray(w * h)
@@ -209,8 +75,11 @@ internal class PageAnalysis(val bitmap: Bitmap) {
 
     // ---- ruled lines ---------------------------------------------------------------------------
 
-    /** Long thin dark lines, horizontal and vertical ([textHeight]: typical word box height). */
-    fun rules(textHeight: Float): Pair<List<Rule>, List<Rule>> {
+    /**
+     * Long thin dark lines, horizontal and vertical ([textHeight]: typical word box height). Lines up to
+     * [maxThick] pixels thick count (To Excel allows thicker ones: scanned forms often have heavy rules).
+     */
+    fun rules(textHeight: Float, maxThick: Int = max(8, min(w, h) / 200)): Pair<List<Rule>, List<Rule>> {
         val dark = BooleanArray(w * h) { i ->
             val b = bg[i].toInt() and 0xFF
             (gray[i].toInt() and 0xFF) < b - max(9f, b * 0.04f)
@@ -218,27 +87,8 @@ internal class PageAnalysis(val bitmap: Bitmap) {
         // A line is thin across: keep dark pixels whose dark run across the line direction is short
         // (letter stems, QR modules and photos are thicker), then let the line step one pixel sideways
         // so slanted or gently curved lines still give long runs.
-        val maxThick = max(8, min(w, h) / 200)
-        val vRun = IntArray(w * h)
-        for (x in 0 until w) {
-            var y = 0
-            while (y < h) {
-                if (!dark[y * w + x]) { y++; continue }
-                val s = y
-                while (y < h && dark[y * w + x]) y++
-                for (yy in s until y) vRun[yy * w + x] = y - s
-            }
-        }
-        val hRun = IntArray(w * h)
-        for (y in 0 until h) {
-            var x = 0
-            while (x < w) {
-                if (!dark[y * w + x]) { x++; continue }
-                val s = x
-                while (x < w && dark[y * w + x]) x++
-                for (xx in s until x) hRun[y * w + xx] = x - s
-            }
-        }
+        val vRun = runLengths(dark, vertical = true)
+        val hRun = runLengths(dark, vertical = false)
         val hThin = BooleanArray(w * h) { dark[it] && vRun[it] <= maxThick }
         val vThin = BooleanArray(w * h) { dark[it] && hRun[it] <= maxThick }
         val hMask = BooleanArray(w * h) { i -> hThin[i] || (i >= w && hThin[i - w]) || (i + w < w * h && hThin[i + w]) }
@@ -248,84 +98,141 @@ internal class PageAnalysis(val bitmap: Bitmap) {
         }
         val minH = max(40, min((w * 0.05f).toInt(), (textHeight * 3.5f).toInt()))
         val minV = max(24, (textHeight * 1.5f).toInt())
-        return lines(hMask, true, minH) to lines(vMask, false, minV)
+        return lines(hMask, true, minH, maxThick) to lines(vMask, false, minV, maxThick)
     }
 
-    private class Run(val across: Int, val s: Int, val e: Int)
+    /** Index of the pixel at position [pos] along scan line [line] (a column when [vertical], else a row). */
+    private fun pixel(line: Int, pos: Int, vertical: Boolean) = if (vertical) pos * w + line else line * w + pos
 
-    private fun lines(dark: BooleanArray, horizontal: Boolean, minLen: Int): List<Rule> {
-        val outer = if (horizontal) h else w
-        val inner = if (horizontal) w else h
-        val maxThick = max(8, min(w, h) / 200)
-        val active = ArrayList<Pair<Rule, DoubleArray>>() // rule, [lastAcross, total run length]
-        val done = ArrayList<Pair<Rule, Double>>()
-        for (o in 0 until outer) {
-            val runs = ArrayList<Run>()
-            var i = 0
-            while (i < inner) {
-                val idx = if (horizontal) o * w + i else i * w + o
-                if (!dark[idx]) { i++; continue }
-                val s = i
-                var last = i
-                var j = i + 1
-                while (j < inner) {
-                    val jdx = if (horizontal) o * w + j else j * w + o
-                    if (dark[jdx]) last = j else if (j - last > 5) break
-                    j++
-                }
-                if (last - s + 1 >= minLen) runs += Run(o, s, last)
-                i = last + 1
-            }
-            for (r in runs) {
-                val hit = active.firstOrNull { (rule, st) ->
-                    o - st[0] <= 2 && overlap(rule.start, rule.end, r.s.toFloat(), r.e.toFloat()) >= 0.5f * min(rule.end - rule.start, (r.e - r.s).toFloat())
-                }
-                val len = (r.e - r.s + 1).toDouble()
-                if (hit != null) {
-                    hit.first.add((r.s + r.e) / 2f, o.toFloat(), len)
-                    hit.first.spans += floatArrayOf(r.s.toFloat(), r.e.toFloat())
-                    hit.first.start = min(hit.first.start, r.s.toFloat()); hit.first.end = max(hit.first.end, r.e.toFloat())
-                    hit.second[0] = o.toDouble(); hit.second[1] += len
-                } else {
-                    val rule = Rule(horizontal)
-                    rule.add(r.s.toFloat(), o.toFloat(), len / 2)
-                    rule.add(r.e.toFloat(), o.toFloat(), len / 2)
-                    rule.spans += floatArrayOf(r.s.toFloat(), r.e.toFloat())
-                    rule.start = r.s.toFloat(); rule.end = r.e.toFloat()
-                    active += rule to doubleArrayOf(o.toDouble(), len)
-                }
-            }
-            val it = active.iterator()
-            while (it.hasNext()) {
-                val (rule, st) = it.next()
-                if (o - st[0] > 2) { done += rule to st[1]; it.remove() }
+    /** For every dark pixel, the length of the unbroken dark run through it along its column or its row. */
+    private fun runLengths(dark: BooleanArray, vertical: Boolean): IntArray {
+        val out = IntArray(w * h)
+        val length = if (vertical) h else w
+        for (line in 0 until (if (vertical) w else h)) {
+            var pos = 0
+            while (pos < length) {
+                val end = darkRunEnd(dark, line, pos, length, vertical)
+                writeRunLength(out, line, pos, end, vertical)
+                pos = max(end, pos + 1)
             }
         }
-        active.forEach { done += it.first to it.second[1] }
+        return out
+    }
+
+    /** Where the dark run starting at [pos] ends (exclusive); [pos] itself when that pixel is not dark. */
+    private fun darkRunEnd(dark: BooleanArray, line: Int, pos: Int, length: Int, vertical: Boolean): Int {
+        var end = pos
+        while (end < length && dark[pixel(line, end, vertical)]) end++
+        return end
+    }
+
+    private fun writeRunLength(out: IntArray, line: Int, start: Int, end: Int, vertical: Boolean) {
+        for (pos in start until end) out[pixel(line, pos, vertical)] = end - start
+    }
+
+    /** A stretch of line pixels on one scan line, from [s] to [e] along the line. */
+    private class Run(val s: Int, val e: Int) {
+        val length: Double get() = (e - s + 1).toDouble()
+    }
+
+    /** A rule being followed from scan line to scan line: where it was last seen and its dark pixels so far. */
+    private class Track(val rule: Rule, var lastLine: Int, var darkPixels: Double)
+
+    private fun lines(dark: BooleanArray, horizontal: Boolean, minLen: Int, maxThick: Int): List<Rule> {
+        val outer = if (horizontal) h else w
+        val inner = if (horizontal) w else h
+        val active = ArrayList<Track>()
+        val done = ArrayList<Track>()
+        for (line in 0 until outer) {
+            for (run in longRuns(dark, line, inner, horizontal, minLen)) {
+                val track = active.firstOrNull { continues(it, run, line) }
+                if (track != null) extend(track, run, line) else active += startTrack(run, line, horizontal)
+            }
+            // A rule not seen for more than two scan lines has ended.
+            val ended = active.filter { line - it.lastLine > 2 }
+            done += ended
+            active -= ended.toSet()
+        }
+        done += active
         // Thickness = dark rows per position along the line (a slanted line crosses many rows but is thin).
-        val rules = done.map { (rule, total) ->
-            rule.thickness = (total / (rule.end - rule.start + 1).coerceAtLeast(1f)).toFloat(); rule.fit(); rule
+        val rules = done.map { track ->
+            track.rule.apply {
+                thickness = (track.darkPixels / (end - start + 1).coerceAtLeast(1f)).toFloat()
+                fit()
+            }
         }.filter { it.thickness <= maxThick * 2 }.toMutableList()
         // Short pieces take the slant of the long lines (the page's skew), not their own noisy fit.
         val long = rules.filter { it.end - it.start > inner * 0.25f }
         val skew = if (long.isEmpty()) 0f else long.map { it.b }.sorted()[long.size / 2]
         for (r in rules) if (r.end - r.start < inner * 0.25f) r.fixSlope(skew)
         // Join pieces of the same slightly slanted line.
-        var changed = true
-        while (changed) {
-            changed = false
-            loop@ for (i in rules.indices) for (j in rules.indices) {
-                if (i == j) continue
-                val a = rules[i]; val b = rules[j]
-                if (b.start < a.end - 4 || b.start - a.end > 24) continue
-                if (abs(a.at(a.end) - b.at(b.start)) > 3) continue
-                a.merge(b)
-                rules.removeAt(j)
-                changed = true
-                break@loop
-            }
+        while (joinFirstContinuation(rules)) {
+            // A joined rule may now reach a further piece, so look again from the start.
         }
         return rules.filter { it.end - it.start >= minLen }
+    }
+
+    /** Runs of line pixels on scan line [line] at least [minLen] long; gaps of up to 5 pixels do not break a run. */
+    private fun longRuns(dark: BooleanArray, line: Int, length: Int, horizontal: Boolean, minLen: Int): List<Run> {
+        val runs = ArrayList<Run>()
+        var pos = 0
+        while (pos < length) {
+            if (!dark[pixel(line, pos, !horizontal)]) {
+                pos++
+                continue
+            }
+            var last = pos
+            var next = pos + 1
+            while (next < length) {
+                if (dark[pixel(line, next, !horizontal)]) last = next else if (next - last > 5) break
+                next++
+            }
+            if (last - pos + 1 >= minLen) runs += Run(pos, last)
+            pos = last + 1
+        }
+        return runs
+    }
+
+    /** Whether [run] on scan line [line] belongs to the rule of [track]: seen just before, and mostly overlapping. */
+    private fun continues(track: Track, run: Run, line: Int): Boolean {
+        val rule = track.rule
+        return line - track.lastLine <= 2 &&
+            overlap(rule.start, rule.end, run.s.toFloat(), run.e.toFloat()) >= 0.5f * min(rule.end - rule.start, (run.e - run.s).toFloat())
+    }
+
+    private fun extend(track: Track, run: Run, line: Int) {
+        val rule = track.rule
+        rule.add((run.s + run.e) / 2f, line.toFloat(), run.length)
+        rule.spans += floatArrayOf(run.s.toFloat(), run.e.toFloat())
+        rule.start = min(rule.start, run.s.toFloat())
+        rule.end = max(rule.end, run.e.toFloat())
+        track.lastLine = line
+        track.darkPixels += run.length
+    }
+
+    private fun startTrack(run: Run, line: Int, horizontal: Boolean): Track {
+        val rule = Rule(horizontal)
+        rule.add(run.s.toFloat(), line.toFloat(), run.length / 2)
+        rule.add(run.e.toFloat(), line.toFloat(), run.length / 2)
+        rule.spans += floatArrayOf(run.s.toFloat(), run.e.toFloat())
+        rule.start = run.s.toFloat()
+        rule.end = run.e.toFloat()
+        return Track(rule, line, run.length)
+    }
+
+    /** Joins the first rule that carries on where another ends into that one; false when there is none. */
+    private fun joinFirstContinuation(rules: MutableList<Rule>): Boolean {
+        for (i in rules.indices) for (j in rules.indices) {
+            if (i == j) continue
+            val a = rules[i]
+            val b = rules[j]
+            if (b.start < a.end - 4 || b.start - a.end > 24) continue
+            if (abs(a.at(a.end) - b.at(b.start)) > 3) continue
+            a.merge(b)
+            rules.removeAt(j)
+            return true
+        }
+        return false
     }
 
     private fun overlap(a0: Float, a1: Float, b0: Float, b1: Float) = max(0f, min(a1, b1) - max(a0, b0))
@@ -336,16 +243,16 @@ internal class PageAnalysis(val bitmap: Bitmap) {
     fun gridTables(hRules: List<Rule>, vRules: List<Rule>, textHeight: Float): List<GridTable> {
         val tol = max(6f, min(w, h) / 250f)
         val all = hRules + vRules
-        val parent = IntArray(all.size) { it }
-        fun find(i: Int): Int { var x = i; while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x] }; return x }
+        // Rules that cross belong to the same table.
+        val crossing = DisjointSets(all.size)
         for ((i, hr) in hRules.withIndex()) for ((j, vr) in vRules.withIndex()) {
             val x = vr.at(hr.at(vr.a))
             val y = hr.at(x)
             if (x >= hr.start - tol && x <= hr.end + tol && y >= vr.start - tol && y <= vr.end + tol) {
-                parent[find(i)] = find(hRules.size + j)
+                crossing.union(i, hRules.size + j)
             }
         }
-        val groups = all.indices.groupBy { find(it) }
+        val groups = all.indices.groupBy { crossing.find(it) }
         val out = ArrayList<GridTable>()
         for ((_, members) in groups) {
             val hs = members.filter { it < hRules.size }.map { hRules[it] }
@@ -403,55 +310,66 @@ internal class PageAnalysis(val bitmap: Bitmap) {
         return out
     }
 
+    /** The table's cells: grid squares with no line between them are one (merged) cell. */
     private fun cells(t: GridTable): List<GridCell> {
-        val rows = t.rows
-        val cols = t.cols
-        val nr = rows.size - 1
-        val nc = cols.size - 1
-        val parent = IntArray(nr * nc) { it }
-        fun find(i: Int): Int { var x = i; while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x] }; return x }
-        fun union(a: Int, b: Int) { parent[find(a)] = find(b) }
+        val nr = t.rows.size - 1
+        val nc = t.cols.size - 1
+        val joined = DisjointSets(nr * nc)
         for (r in 0 until nr) for (c in 0 until nc) {
-            if (c + 1 < nc) {
-                // Vertical line between (r, c) and (r, c+1)?
-                val x = cols[c + 1].at((t.rowY(r) + t.rowY(r + 1)) / 2)
-                val top = rows[r].at(x); val bot = rows[r + 1].at(x)
-                val pad = (bot - top) * 0.12f
-                if (cols[c + 1].coverage(top + pad, bot - pad) < 0.4f) union(r * nc + c, r * nc + c + 1)
-            }
-            if (r + 1 < nr) {
-                val y = rows[r + 1].at((t.colX(c) + t.colX(c + 1)) / 2)
-                val left = cols[c].at(y); val right = cols[c + 1].at(y)
-                val pad = (right - left) * 0.08f
-                if (rows[r + 1].coverage(left + pad, right - pad) < 0.4f) union(r * nc + c, (r + 1) * nc + c)
-            }
+            if (c + 1 < nc && !hasLineRightOf(t, r, c)) joined.union(r * nc + c, r * nc + c + 1)
+            if (r + 1 < nr && !hasLineBelow(t, r, c)) joined.union(r * nc + c, (r + 1) * nc + c)
         }
-        val sets = (0 until nr * nc).groupBy { find(it) }
         val out = ArrayList<GridCell>()
-        for ((_, members) in sets) {
-            val r0 = members.minOf { it / nc }; val r1 = members.maxOf { it / nc }
-            val c0 = members.minOf { it % nc }; val c1 = members.maxOf { it % nc }
-            if (members.size == (r1 - r0 + 1) * (c1 - c0 + 1)) {
-                out += GridCell(r0, c0, r1, c1)
-            } else {
-                // Not a rectangle (a broken line joined two areas): cut it into rectangles, each as wide
-                // and then as tall as the area allows.
-                val inSet = members.toHashSet()
-                val used = HashSet<Int>()
-                for (m in members.sorted()) {
-                    if (m in used) continue
-                    val r = m / nc
-                    val c = m % nc
-                    var cEnd = c
-                    while (cEnd + 1 < nc && (r * nc + cEnd + 1) in inSet && (r * nc + cEnd + 1) !in used) cEnd++
-                    var rEnd = r
-                    while (rEnd + 1 < nr && (c..cEnd).all { cc -> ((rEnd + 1) * nc + cc) in inSet && ((rEnd + 1) * nc + cc) !in used }) rEnd++
-                    for (rr in r..rEnd) for (cc in c..cEnd) used += rr * nc + cc
-                    out += GridCell(r, c, rEnd, cEnd)
-                }
-            }
+        for (members in (0 until nr * nc).groupBy { joined.find(it) }.values) {
+            val r0 = members.minOf { it / nc }
+            val r1 = members.maxOf { it / nc }
+            val c0 = members.minOf { it % nc }
+            val c1 = members.maxOf { it % nc }
+            val rectangle = members.size == (r1 - r0 + 1) * (c1 - c0 + 1)
+            if (rectangle) out += GridCell(r0, c0, r1, c1) else out += cutIntoRectangles(members, nr, nc)
         }
         return out.sortedWith(compareBy({ it.r0 }, { it.c0 }))
+    }
+
+    /** Whether the vertical line between grid squares (r, c) and (r, c + 1) is drawn. */
+    private fun hasLineRightOf(t: GridTable, r: Int, c: Int): Boolean {
+        val line = t.cols[c + 1]
+        val x = line.at((t.rowY(r) + t.rowY(r + 1)) / 2)
+        val top = t.rows[r].at(x)
+        val bottom = t.rows[r + 1].at(x)
+        val pad = (bottom - top) * 0.12f
+        return line.coverage(top + pad, bottom - pad) >= 0.4f
+    }
+
+    /** Whether the horizontal line between grid squares (r, c) and (r + 1, c) is drawn. */
+    private fun hasLineBelow(t: GridTable, r: Int, c: Int): Boolean {
+        val line = t.rows[r + 1]
+        val y = line.at((t.colX(c) + t.colX(c + 1)) / 2)
+        val left = t.cols[c].at(y)
+        val right = t.cols[c + 1].at(y)
+        val pad = (right - left) * 0.08f
+        return line.coverage(left + pad, right - pad) >= 0.4f
+    }
+
+    /**
+     * Grid squares [members] (row × [nc] + column) that do not form a rectangle (a broken line joined two
+     * areas), cut into rectangles: each as wide and then as tall as the area allows.
+     */
+    private fun cutIntoRectangles(members: List<Int>, nr: Int, nc: Int): List<GridCell> {
+        val free = members.toHashSet()
+        val out = ArrayList<GridCell>()
+        for (m in members.sorted()) {
+            if (m !in free) continue
+            val r = m / nc
+            val c = m % nc
+            var cEnd = c
+            while (cEnd + 1 < nc && (r * nc + cEnd + 1) in free) cEnd++
+            var rEnd = r
+            while (rEnd + 1 < nr && (c..cEnd).all { ((rEnd + 1) * nc + it) in free }) rEnd++
+            for (rr in r..rEnd) free -= (c..cEnd).map { rr * nc + it }.toSet()
+            out += GridCell(r, c, rEnd, cEnd)
+        }
+        return out
     }
 
     // ---- shaded row bands ------------------------------------------------------------------------
@@ -582,371 +500,9 @@ internal class PageAnalysis(val bitmap: Bitmap) {
         return (r shl 16) or (g shl 8) or b
     }
 
-    // ---- pictures --------------------------------------------------------------------------------
-
-    /**
-     * Areas that are neither text nor table lines nor plain paper: photos, logos, QR codes, drawings,
-     * and text the OCR could not read. [known] (e.g. barcodes) are always pictures.
-     */
-    fun pictures(words: List<OcrWord>, rules: List<Rule>, exclude: List<RectF>, known: List<RectF>, textHeight: Float): List<RectF> {
-        // Loose: dark, textured or coloured. Strict (for areas full of text, e.g. a stained sign with
-        // photos on it): only clearly dark or clearly coloured.
-        val loose = BooleanArray(w * h)
-        val strict = BooleanArray(w * h)
-        for (i in loose.indices) {
-            val gv = gray[i].toInt() and 0xFF
-            val bv = bg[i].toInt() and 0xFF
-            val c = px[i]
-            val r = (c shr 16) and 0xFF; val gg = (c shr 8) and 0xFF; val b = c and 0xFF
-            val sat = max(r, max(gg, b)) - min(r, min(gg, b))
-            val x = i % w
-            val y = i / w
-            val grad = if (x in 1 until w - 1 && y in 1 until h - 1) {
-                abs((gray[i + 1].toInt() and 0xFF) - (gray[i - 1].toInt() and 0xFF)) +
-                    abs((gray[i + w].toInt() and 0xFF) - (gray[i - w].toInt() and 0xFF))
-            } else 0
-            loose[i] = gv < bv - 60 || (grad > 24 && gv < bv - 18) || (sat > 60 && gv < bv - 8)
-            strict[i] = gv < bv - 70 || (sat > 70 && gv < bv - 12)
-        }
-        fun clear(mask: BooleanArray, rect: RectF, pad: Float) {
-            val x0 = (rect.left - pad).toInt().coerceIn(0, w); val x1 = (rect.right + pad).toInt().coerceIn(0, w)
-            val y0 = (rect.top - pad).toInt().coerceIn(0, h); val y1 = (rect.bottom + pad).toInt().coerceIn(0, h)
-            for (y in y0 until y1) for (x in x0 until x1) mask[y * w + x] = false
-        }
-        for (mask in arrayOf(loose, strict)) {
-            for (wd in words) if (wd.confidence >= 0.5f) clear(mask, wd.box, wd.box.height() * 0.15f)
-            for (r in rules) {
-                val half = r.thickness / 2 + 2
-                var t = r.start
-                while (t <= r.end) {
-                    val across = r.at(t)
-                    if (r.horizontal) clear(mask, RectF(t, across - half, t + 1, across + half), 0f)
-                    else clear(mask, RectF(across - half, t, across + half, t + 1), 0f)
-                    t += 1f
-                }
-            }
-            for (e in exclude) clear(mask, e, 0f)
-        }
-
-        fun wordsIn(rect: RectF) = words.count { it.confidence >= 0.6f && rect.contains(it.box.centerX(), it.box.centerY()) }
-        fun textShare(rect: RectF) = words.sumOf { wd ->
-            val i = RectF(wd.box)
-            if (!i.intersect(rect)) 0.0 else (i.width() * i.height()).toDouble()
-        } / (rect.width() * rect.height()).coerceAtLeast(1f)
-
-        /** A component that is mostly one recognised word (a large capital, a logo letter). */
-        fun isGlyph(rect: RectF) = words.any { wd ->
-            val i = RectF(wd.box)
-            if (i.intersect(rect) && i.width() * i.height() >= 0.5f * rect.width() * rect.height()) return@any true
-            // A letter-sized blob right beside a word the OCR was unsure of is that word's glyph (OCR boxes
-            // for big, stylised letters are sometimes off by a letter's width).
-            val overlapY = min(rect.bottom, wd.box.bottom) - max(rect.top, wd.box.top)
-            val gapX = max(wd.box.left - rect.right, rect.left - wd.box.right)
-            wd.confidence < 0.5f && wd.text.length <= 3 && overlapY >= 0.6f * rect.height() &&
-                rect.height() <= wd.box.height() * 1.6f && gapX <= wd.box.height()
-        }
-        /**
-         * Plain shading (a shadow over the paper, a tinted panel or a coloured label behind a heading):
-         * the area around its words is flat. Photos, drawings and codes are not.
-         */
-        fun isFlat(rect: RectF): Boolean {
-            val x0 = rect.left.toInt().coerceIn(0, w - 1); val x1 = rect.right.toInt().coerceIn(x0 + 1, w)
-            val y0 = rect.top.toInt().coerceIn(0, h - 1); val y1 = rect.bottom.toInt().coerceIn(y0 + 1, h)
-            val inside = words.filter { RectF.intersects(it.box, rect) }.map { RectF(it.box).apply { inset(-it.box.height() * 0.2f, -it.box.height() * 0.2f) } }
-            val step = max(1, min(x1 - x0, y1 - y0) / 60)
-            var n = 0; var sum = 0.0; var sq = 0.0
-            for (y in y0 until y1 step step) for (x in x0 until x1 step step) {
-                if (inside.any { it.contains(x.toFloat(), y.toFloat()) }) continue
-                val v = (gray[y * w + x].toInt() and 0xFF) - (bg[y * w + x].toInt() and 0xFF)
-                n++; sum += v; sq += v.toDouble() * v
-            }
-            if (n < 30) return false
-            val mean = sum / n
-            return sqrt(max(0.0, sq / n - mean * mean)) < 12.0
-        }
-        val out = ArrayList<RectF>()
-        for (rect in components(loose, null, 2, textHeight)) {
-            if (textShare(rect) > 0.45 || isGlyph(rect) || isFlat(rect)) continue
-            if (wordsIn(rect) <= 4) { out += rect; continue }
-            // Many words inside: the loose mask joined text and background. Look again, strictly.
-            for (sub in components(strict, rect, 1, textHeight)) {
-                if (wordsIn(sub) <= 3 && textShare(sub) < 0.3) out += sub
-            }
-        }
-        out += known
-        return mergeRects(out, w * 0.01f)
-    }
-
-    /**
-     * Connected areas of [mask] (inside [within], or the whole page), in blocks of ~0.4 % of the short
-     * side after closing gaps of [close] blocks; only areas big and solid enough to be a picture.
-     */
-    private fun components(mask: BooleanArray, within: RectF?, close: Int, textHeight: Float): List<RectF> {
-        val bs = max(4, min(w, h) / 250)
-        val ox = ((within?.left ?: 0f) / bs).toInt()
-        val oy = ((within?.top ?: 0f) / bs).toInt()
-        val bw = ((within?.right ?: w.toFloat()) / bs).toInt().coerceAtMost((w + bs - 1) / bs) - ox
-        val bh = ((within?.bottom ?: h.toFloat()) / bs).toInt().coerceAtMost((h + bs - 1) / bs) - oy
-        if (bw <= 0 || bh <= 0) return emptyList()
-        val counts = IntArray(bw * bh)
-        for (by in 0 until bh) for (bx in 0 until bw) {
-            var n = 0
-            for (y in (oy + by) * bs until min(h, (oy + by + 1) * bs)) for (x in (ox + bx) * bs until min(w, (ox + bx + 1) * bs)) {
-                if (mask[y * w + x]) n++
-            }
-            counts[by * bw + bx] = n
-        }
-        var blocks = BooleanArray(bw * bh) { counts[it] >= bs * bs / 5 }
-        // Close small gaps (a photo with white patches, a QR code's quiet modules).
-        if (close > 0) blocks = erode(dilate(blocks, bw, bh, close), bw, bh, close)
-        val label = BooleanArray(bw * bh)
-        val queue = IntArray(bw * bh)
-        val out = ArrayList<RectF>()
-        for (start in blocks.indices) {
-            if (!blocks[start] || label[start]) continue
-            var head = 0; var tail = 0
-            queue[tail++] = start; label[start] = true
-            var minX = bw; var minY = bh; var maxX = 0; var maxY = 0; var area = 0
-            while (head < tail) {
-                val i = queue[head++]
-                val bx = i % bw; val by = i / bw
-                area++
-                minX = min(minX, bx); maxX = max(maxX, bx); minY = min(minY, by); maxY = max(maxY, by)
-                for (dy in -1..1) for (dx in -1..1) {
-                    val nx = bx + dx; val ny = by + dy
-                    if (nx !in 0 until bw || ny !in 0 until bh) continue
-                    val j = ny * bw + nx
-                    if (blocks[j] && !label[j]) { label[j] = true; queue[tail++] = j }
-                }
-            }
-            val rect = RectF(
-                ((ox + minX) * bs).toFloat(), ((oy + minY) * bs).toFloat(),
-                ((ox + maxX + 1) * bs).toFloat().coerceAtMost(w.toFloat()), ((oy + maxY + 1) * bs).toFloat().coerceAtMost(h.toFloat()),
-            )
-            val boxArea = (maxX - minX + 1) * (maxY - minY + 1)
-            val bigEnough = rect.width() >= w * 0.035f && rect.height() >= max(textHeight * 1.6f, w * 0.025f)
-            if (bigEnough && area >= boxArea * 0.18f) out += rect
-        }
-        return out
-    }
-
-    private fun dilate(m: BooleanArray, bw: Int, bh: Int, r: Int): BooleanArray {
-        val out = BooleanArray(m.size)
-        for (y in 0 until bh) for (x in 0 until bw) {
-            if (!m[y * bw + x]) continue
-            for (dy in -r..r) for (dx in -r..r) {
-                val nx = x + dx; val ny = y + dy
-                if (nx in 0 until bw && ny in 0 until bh) out[ny * bw + nx] = true
-            }
-        }
-        return out
-    }
-
-    private fun erode(m: BooleanArray, bw: Int, bh: Int, r: Int): BooleanArray {
-        val out = BooleanArray(m.size)
-        for (y in 0 until bh) for (x in 0 until bw) {
-            var all = true
-            loop@ for (dy in -r..r) for (dx in -r..r) {
-                val nx = (x + dx).coerceIn(0, bw - 1); val ny = (y + dy).coerceIn(0, bh - 1)
-                if (!m[ny * bw + nx]) { all = false; break@loop }
-            }
-            out[y * bw + x] = all
-        }
-        return out
-    }
-
-    fun mergeRects(rects: List<RectF>, gap: Float): List<RectF> {
-        val list = rects.map { RectF(it) }.toMutableList()
-        var changed = true
-        while (changed) {
-            changed = false
-            loop@ for (i in list.indices) for (j in i + 1 until list.size) {
-                val a = list[i]; val b = list[j]
-                if (a.left - gap <= b.right && b.left - gap <= a.right && a.top - gap <= b.bottom && b.top - gap <= a.bottom) {
-                    a.union(b); list.removeAt(j); changed = true; break@loop
-                }
-            }
-        }
-        return list
-    }
-
-    // ---- word appearance -----------------------------------------------------------------------
-
-    /** Stroke thickness and colour of a word. */
-    fun styleWord(word: OcrWord) {
-        val box = word.box
-        val x0 = box.left.toInt().coerceIn(0, w - 1); val x1 = box.right.toInt().coerceIn(x0 + 1, w)
-        val y0 = box.top.toInt().coerceIn(0, h - 1); val y1 = box.bottom.toInt().coerceIn(y0 + 1, h)
-        var minG = 255
-        for (y in y0 until y1) for (x in x0 until x1) minG = min(minG, gray[y * w + x].toInt() and 0xFF)
-        // Stroke thickness: median length of the dark runs along each row (= width of vertical stems),
-        // dark meaning below halfway between the word's darkest ink and the paper.
-        val runs = ArrayList<Int>()
-        for (y in y0 until y1) {
-            var run = 0
-            for (x in x0 until x1) {
-                val i = y * w + x
-                val dark = (gray[i].toInt() and 0xFF) < (minG + (bg[i].toInt() and 0xFF)) / 2
-                if (dark) run++ else if (run > 0) { runs += run; run = 0 }
-            }
-            if (run > 0) runs += run
-        }
-        if (runs.isNotEmpty()) {
-            runs.sort()
-            word.stroke = runs[runs.size / 2].toFloat()
-        }
-        // Colour: the ink pixels (darker than halfway to the paper), white-balanced against the paper
-        // right around the word (photos of pages often have a warm or cool cast).
-        val ink = ArrayList<Int>()
-        var pr = 0.0; var pg = 0.0; var pb = 0.0; var pn = 0
-        for (y in y0 until y1 step max(1, (y1 - y0) / 24)) for (x in x0 until x1 step max(1, (x1 - x0) / 48)) {
-            val i = y * w + x
-            val gv = gray[i].toInt() and 0xFF
-            val bv = bg[i].toInt() and 0xFF
-            if (gv <= minG + (bv - minG) / 2) ink += px[i]
-            else if (gv >= minG + (bv - minG) * 0.85f) {
-                val c = px[i]
-                pr += (c shr 16) and 0xFF; pg += (c shr 8) and 0xFF; pb += c and 0xFF; pn++
-            }
-        }
-        val samples = if (pn >= 8) {
-            val fr = 255.0 / (pr / pn).coerceAtLeast(60.0)
-            val fg = 255.0 / (pg / pn).coerceAtLeast(60.0)
-            val fb = 255.0 / (pb / pn).coerceAtLeast(60.0)
-            ink.map { c ->
-                val r = (((c shr 16) and 0xFF) * fr).roundToInt().coerceAtMost(255)
-                val g = (((c shr 8) and 0xFF) * fg).roundToInt().coerceAtMost(255)
-                val b = ((c and 0xFF) * fb).roundToInt().coerceAtMost(255)
-                (r shl 16) or (g shl 8) or b
-            }
-        } else {
-            ink.map { onWhite(it, paper) }
-        }
-        word.color = inkColor(samples)
-        // Pencil (handwriting) is light grey even against its own paper.
-        word.inkLuma = samples.map { ((((it shr 16) and 0xFF) * 299 + ((it shr 8) and 0xFF) * 587 + (it and 0xFF) * 114) / 1000) }
-            .sorted().let { if (it.isEmpty()) 0 else it[it.size / 2] }
-    }
-
-    /**
-     * Top and bottom of the ink inside [box] (OCR boxes are padded line boxes): rows where enough pixels
-     * are darker than halfway between the darkest ink and the paper.
-     */
-    fun inkSpan(box: RectF): Pair<Float, Float>? {
-        val x0 = box.left.toInt().coerceIn(0, w - 1); val x1 = box.right.toInt().coerceIn(x0 + 1, w)
-        val y0 = box.top.toInt().coerceIn(0, h - 1); val y1 = box.bottom.toInt().coerceIn(y0 + 1, h)
-        var minG = 255
-        for (y in y0 until y1) for (x in x0 until x1 step 2) minG = min(minG, gray[y * w + x].toInt() and 0xFF)
-        val need = max(1, (x1 - x0) / 200)
-        val inkRow = BooleanArray(y1 - y0)
-        for (y in y0 until y1) {
-            var n = 0
-            for (x in x0 until x1) {
-                val i = y * w + x
-                if ((gray[i].toInt() and 0xFF) < (minG + (bg[i].toInt() and 0xFF)) / 2) n++
-            }
-            inkRow[y - y0] = n >= need
-        }
-        // The line's own ink is the longest band of ink rows (small gaps for i-dots and accents allowed);
-        // bits of the lines above and below sit apart from it at the box edges.
-        val maxGap = max(2, ((y1 - y0) * 0.12f).toInt())
-        var bestS = -1; var bestE = -1; var s = -1; var e = -1
-        for (r in inkRow.indices) {
-            if (!inkRow[r]) continue
-            if (s < 0 || r - e > maxGap) { s = r }
-            e = r
-            if (e - s > bestE - bestS) { bestS = s; bestE = e }
-        }
-        if (bestS < 0 || bestE - bestS < 3) return null
-        return (y0 + bestS).toFloat() to (y0 + bestE + 1).toFloat()
-    }
-
-    /**
-     * Font size in pixels from the dense core of a text line: the rows where most strokes are is the
-     * x-height for lowercase text (≈0.53 em), the cap height for capitals and digits (≈0.72 em), and
-     * nearly the whole character for CJK (≈0.85 em). Ascenders, descenders and touching neighbour
-     * lines do not change it.
-     */
-    fun emFromCore(box: RectF, text: String): Float? {
-        val x0 = box.left.toInt().coerceIn(0, w - 1); val x1 = box.right.toInt().coerceIn(x0 + 1, w)
-        val y0 = box.top.toInt().coerceIn(0, h - 1); val y1 = box.bottom.toInt().coerceIn(y0 + 1, h)
-        var minG = 255
-        for (y in y0 until y1) for (x in x0 until x1 step 2) minG = min(minG, gray[y * w + x].toInt() and 0xFF)
-        val counts = IntArray(y1 - y0)
-        for (y in y0 until y1) {
-            var n = 0
-            for (x in x0 until x1) {
-                val i = y * w + x
-                if ((gray[i].toInt() and 0xFF) < (minG + (bg[i].toInt() and 0xFF)) / 2) n++
-            }
-            counts[y - y0] = n
-        }
-        // Reference density: the 70th percentile of the inked rows (one dense crossbar row must not set it).
-        val inked = counts.filter { it > 0 }.sorted()
-        if (inked.size < 4) return null
-        val ref = inked[(inked.size * 0.7f).toInt().coerceAtMost(inked.size - 1)]
-        if (ref < 3) return null
-        var lower = 0; var upper = 0; var cjk = 0
-        for (c in text) {
-            when {
-                c.code in 0x2E80..0x9FFF || c.code in 0xAC00..0xD7AF || c.code in 0x3040..0x30FF -> cjk++
-                c.isLowerCase() -> lower++
-                c.isUpperCase() || c.isDigit() -> upper++
-            }
-        }
-        // Lowercase text: every letter has ink in the x-height band, only tall letters above it, so the
-        // band is where the density stays near its high; capitals are evenly dense top to bottom.
-        val lowercase = lower >= upper && cjk <= lower + upper
-        val need = if (lowercase) inked[(inked.size * 0.85f).toInt().coerceAtMost(inked.size - 1)] * 0.6f else ref * 0.4f
-        // The longest band of dense rows (a box covering two lines must not count both).
-        var best = 0; var run = 0
-        for (c in counts) {
-            if (c >= need) { run++; best = max(best, run) } else run = 0
-        }
-        val core = best.toFloat()
-        val frac = when {
-            cjk > lower + upper -> 0.85f
-            lower >= upper -> 0.53f
-            else -> 0.72f
-        }
-        return core / frac
-    }
-
-    /** A pixel as it would look on white paper (divided by the local paper brightness). */
-    private fun onWhite(c: Int, paperLevel: Int): Int {
-        val f = 255f / paperLevel.coerceAtLeast(60)
-        val r = (((c shr 16) and 0xFF) * f).roundToInt().coerceAtMost(255)
-        val g = (((c shr 8) and 0xFF) * f).roundToInt().coerceAtMost(255)
-        val b = ((c and 0xFF) * f).roundToInt().coerceAtMost(255)
-        return (r shl 16) or (g shl 8) or b
-    }
-
-    /** Dark, low-saturation ink is "automatic" (black); clear colours are kept. */
-    fun inkColor(samples: List<Int>): Int? {
-        if (samples.isEmpty()) return null
-        // Mean of the ink (thin strokes are partly paper-coloured, so medians per channel lose the hue).
-        var r = 0.0; var g = 0.0; var b = 0.0
-        for (c in samples) { r += (c shr 16) and 0xFF; g += (c shr 8) and 0xFF; b += c and 0xFF }
-        r /= samples.size; g /= samples.size; b /= samples.size
-        val sat = max(r, max(g, b)) - min(r, min(g, b))
-        val luma = r * 0.299 + g * 0.587 + b * 0.114
-        if (sat < 18) {
-            // Neutral ink: black text (anti-aliasing makes thin strokes look grey), or a real grey caption.
-            if (luma < 165) return null
-            val v = (luma * 0.8).roundToInt().coerceIn(0, 255)
-            return (v shl 16) or (v shl 8) or v
-        }
-        // Dull warm or very dark tints are shadows and lamp light on black print, not coloured ink.
-        if ((sat < 40 && r >= g && g >= b) || (luma < 90 && sat < 35)) return null
-        // Coloured ink photographs paler than printed: strengthen the hue and deepen it a little.
-        val mean = (r + g + b) / 3
-        fun ch(v: Double) = (mean + (v - mean) * 1.6).roundToInt().coerceIn(0, 255)
-        return (ch(r) shl 16) or (ch(g) shl 8) or ch(b)
-    }
-
     companion object {
-        private const val ASCENDERS = "bdfhijklt"
-        private const val DESCENDERS = "gjpqy"
+        const val ASCENDERS = "bdfhijklt"
+        const val DESCENDERS = "gjpqy"
 
         /**
          * Em size from a word box: the box covers cap/ascender height (~0.72 em) when the word has capitals,
@@ -979,5 +535,3 @@ internal class PageAnalysis(val bitmap: Bitmap) {
         fun dist(a: Float, b: Float) = sqrt(a * a + b * b)
     }
 }
-
-internal fun Rect.toRectF() = RectF(this)

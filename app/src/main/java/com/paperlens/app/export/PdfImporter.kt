@@ -8,6 +8,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.paperlens.app.data.DocumentRepository
 import com.paperlens.app.imaging.BitmapUtils
+import com.paperlens.app.runLogged
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +33,7 @@ object PdfImporter {
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: error("Cannot open PDF")
         val documentId = repository.createDocument(title)
         val work = File(context.cacheDir, "pdf_import").apply { deleteRecursively(); mkdirs() }
-        val source = runCatching { context.contentResolver.openInputStream(uri)?.use { PDDocument.load(it) } }.getOrNull()
+        val source = runLogged("PdfImporter", "Reading the PDF's text") { context.contentResolver.openInputStream(uri)?.use { PDDocument.load(it) } }.getOrNull()
         val pagePdfs = source?.let { doc -> PdfPages.split(doc) { File(work, "page_$it.pdf") } }
         descriptor.use { fd ->
             PdfRenderer(fd).use { renderer ->
@@ -49,7 +50,7 @@ object PdfImporter {
                         bitmap.eraseColor(Color.WHITE)
                         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                         // One page at a time keeps memory flat for long PDFs.
-                        val text = source?.let { doc -> runCatching { PdfPages.text(doc, index) }.getOrNull() }
+                        val text = source?.let { doc -> runLogged("PdfImporter", "Text of page ${index + 1}") { PdfPages.text(doc, index) }.getOrNull() }
                         repository.addPdfPage(documentId, bitmap, pagePdfs?.getOrNull(index), text?.plain)
                         bitmap.recycle()
                     }

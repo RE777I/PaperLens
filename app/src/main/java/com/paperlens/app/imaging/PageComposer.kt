@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import kotlin.math.max
@@ -98,20 +99,19 @@ object PageComposer {
             val top = r.top.roundToInt().coerceIn(0, out.height - 1)
             val right = r.right.roundToInt().coerceIn(left + 1, out.width)
             val bottom = r.bottom.roundToInt().coerceIn(top + 1, out.height)
-            var y = top
-            while (y < bottom) {
-                var x = left
-                val bh = min(block, bottom - y)
-                while (x < right) {
-                    val bw = min(block, right - x)
-                    paint.color = src.getPixel(x + bw / 2, y + bh / 2)
-                    canvas.drawRect(x.toFloat(), y.toFloat(), (x + bw).toFloat(), (y + bh).toFloat(), paint)
-                    x += block
-                }
-                y += block
-            }
+            pixelate(src, canvas, paint, Rect(left, top, right, bottom), block)
         }
         return out
+    }
+
+    /** Fills [area] with squares of [block] pixels, each in the colour at its centre in [src]. */
+    private fun pixelate(src: Bitmap, canvas: Canvas, paint: Paint, area: Rect, block: Int) {
+        for (y in area.top until area.bottom step block) for (x in area.left until area.right step block) {
+            val bw = min(block, area.right - x)
+            val bh = min(block, area.bottom - y)
+            paint.color = src.getPixel(x + bw / 2, y + bh / 2)
+            canvas.drawRect(x.toFloat(), y.toFloat(), (x + bw).toFloat(), (y + bh).toFloat(), paint)
+        }
     }
 
     /** Add Text: writes [text] with its top-left at ([x], [y]) image pixels. */
@@ -190,6 +190,37 @@ object PageComposer {
         val box = RectF(right - w - 2 * pad, bottom - paint.textSize - 2 * pad, right, bottom)
         canvas.drawRoundRect(box, pad, pad, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(200, 255, 255, 255) })
         canvas.drawText(text, box.left + pad, box.bottom - pad - paint.descent() / 2, paint)
+        return out
+    }
+
+    /** Where a page number goes on the page. */
+    enum class NumberPlace { BOTTOM_CENTER, BOTTOM_RIGHT, BOTTOM_LEFT, TOP_RIGHT }
+
+    /** Draws [text] (a page number) in the page margin at [place]: dark with a white edge, readable on any paper. */
+    fun pageNumber(src: Bitmap, text: String, place: NumberPlace): Bitmap {
+        val out = src.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(40, 40, 40)
+            textSize = max(out.width, out.height) / 45f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val margin = paint.textSize * 1.2f
+        val w = paint.measureText(text)
+        val x = when (place) {
+            NumberPlace.BOTTOM_CENTER -> (out.width - w) / 2
+            NumberPlace.BOTTOM_LEFT -> margin
+            NumberPlace.BOTTOM_RIGHT, NumberPlace.TOP_RIGHT -> out.width - margin - w
+        }
+        val y = if (place == NumberPlace.TOP_RIGHT) margin + paint.textSize * 0.8f else out.height - margin
+        val edge = Paint(paint).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = paint.textSize * 0.22f
+            strokeJoin = Paint.Join.ROUND
+        }
+        canvas.drawText(text, x, y, edge)
+        canvas.drawText(text, x, y, paint)
         return out
     }
 

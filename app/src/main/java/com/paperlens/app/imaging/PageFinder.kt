@@ -79,20 +79,19 @@ object PageFinder {
 
     private fun boxBlur(src: FloatArray, w: Int, h: Int): FloatArray {
         val out = FloatArray(src.size)
-        for (y in 0 until h) for (x in 0 until w) {
-            var s = 0f; var n = 0
-            for (dy in -1..1) {
-                val yy = y + dy
-                if (yy < 0 || yy >= h) continue
-                for (dx in -1..1) {
-                    val xx = x + dx
-                    if (xx < 0 || xx >= w) continue
-                    s += src[yy * w + xx]; n++
-                }
-            }
-            out[y * w + x] = s / n
-        }
+        for (y in 0 until h) for (x in 0 until w) out[y * w + x] = neighbourMean(src, w, h, x, y)
         return out
+    }
+
+    /** Mean of the pixel at (x, y) and its neighbours that lie inside the image. */
+    private fun neighbourMean(src: FloatArray, w: Int, h: Int, x: Int, y: Int): Float {
+        var sum = 0f
+        var count = 0
+        for (yy in max(0, y - 1)..min(h - 1, y + 1)) for (xx in max(0, x - 1)..min(w - 1, x + 1)) {
+            sum += src[yy * w + xx]
+            count++
+        }
+        return sum / count
     }
 
     private fun otsu(v: FloatArray): Float {
@@ -189,6 +188,29 @@ object PageFinder {
 
     /** Largest quadrilateral with corners on the convex hull of the region, ordered TL, TR, BR, BL. */
     private fun hullQuad(m: BooleanArray, w: Int, h: Int): Pair<List<PointF>, Float>? {
+        val boundary = boundaryPoints(m, w, h)
+        if (boundary.size < 4) return null
+        var hull = convexHull(boundary)
+        if (hull.size < 4) return null
+        if (hull.size > 80) hull = List(80) { hull[it * (hull.size - 1) / 79] }
+        val n = hull.size
+        var best: List<PointF>? = null
+        var bestArea = -1f
+        // Every diagonal i–k, with the farthest hull point on each side of it as the other two corners.
+        for (i in 0 until n) for (k in i + 2 until n) {
+            if (k - i >= n - 1) continue
+            val (j, nearSide) = farthest(hull, i, k, i + 1 until k) ?: continue
+            val (l, farSide) = farthest(hull, i, k, (k + 1 until n) + (0 until i)) ?: continue
+            if (nearSide + farSide > bestArea) {
+                bestArea = nearSide + farSide
+                best = listOf(hull[i], hull[j], hull[k], hull[l])
+            }
+        }
+        return best?.let { order(it) to bestArea / 2 }
+    }
+
+    /** The region's pixels that touch the outside (or the image border). */
+    private fun boundaryPoints(m: BooleanArray, w: Int, h: Int): MutableList<PointF> {
         val pts = ArrayList<PointF>()
         for (y in 0 until h) for (x in 0 until w) {
             val i = y * w + x
@@ -196,36 +218,40 @@ object PageFinder {
             val edge = x == 0 || y == 0 || x == w - 1 || y == h - 1 || !m[i - 1] || !m[i + 1] || !m[i - w] || !m[i + w]
             if (edge) pts += PointF(x.toFloat(), y.toFloat())
         }
-        if (pts.size < 4) return null
+        return pts
+    }
+
+    private fun cross(o: PointF, a: PointF, b: PointF) = (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+
+    /** Convex hull (Andrew's monotone chain); sorts [pts]. */
+    private fun convexHull(pts: MutableList<PointF>): List<PointF> {
         pts.sortWith(compareBy<PointF> { it.x }.thenBy { it.y })
-        fun cross(o: PointF, a: PointF, b: PointF) = (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
-        val lower = ArrayList<PointF>()
-        for (p in pts) {
-            while (lower.size >= 2 && cross(lower[lower.size - 2], lower[lower.size - 1], p) <= 0) lower.removeAt(lower.size - 1)
-            lower += p
+        fun chain(points: List<PointF>): List<PointF> {
+            val out = ArrayList<PointF>()
+            for (p in points) {
+                while (out.size >= 2 && cross(out[out.size - 2], out[out.size - 1], p) <= 0) out.removeAt(out.size - 1)
+                out += p
+            }
+            return out
         }
-        val upper = ArrayList<PointF>()
-        for (p in pts.asReversed()) {
-            while (upper.size >= 2 && cross(upper[upper.size - 2], upper[upper.size - 1], p) <= 0) upper.removeAt(upper.size - 1)
-            upper += p
+        return chain(pts).dropLast(1) + chain(pts.asReversed()).dropLast(1)
+    }
+
+    /**
+     * Among the hull points at [candidates], the one farthest from the line through hull[i] and hull[k] (the
+     * first of equals), with that distance times the line's length; null when there are no candidates.
+     */
+    private fun farthest(hull: List<PointF>, i: Int, k: Int, candidates: Iterable<Int>): Pair<Int, Float>? {
+        var best = -1
+        var bestSpan = -1f
+        for (q in candidates) {
+            val span = abs(cross(hull[i], hull[k], hull[q]))
+            if (span > bestSpan) {
+                bestSpan = span
+                best = q
+            }
         }
-        var hull = lower.dropLast(1) + upper.dropLast(1)
-        if (hull.size < 4) return null
-        if (hull.size > 80) hull = List(80) { hull[it * (hull.size - 1) / 79] }
-        val n = hull.size
-        var best: List<PointF>? = null
-        var bestArea = -1f
-        for (i in 0 until n) for (k in i + 2 until n) {
-            if (k - i >= n - 1) continue
-            val a = hull[i]; val b = hull[k]
-            var j = i + 1; var ja = -1f
-            for (q in i + 1 until k) { val v = abs(cross(a, b, hull[q])); if (v > ja) { ja = v; j = q } }
-            var l = -1; var la = -1f
-            for (q in (k + 1 until n) + (0 until i)) { val v = abs(cross(a, b, hull[q])); if (v > la) { la = v; l = q } }
-            if (l < 0) continue
-            if (ja + la > bestArea) { bestArea = ja + la; best = listOf(hull[i], hull[j], hull[k], hull[l]) }
-        }
-        return best?.let { order(it) to bestArea / 2 }
+        return if (best < 0) null else best to bestSpan
     }
 
     /** Clockwise from the top-left, where "top" is the side closest to horizontal. */
@@ -293,26 +319,33 @@ object PageFinder {
     }
 
     private fun fitCubic(t: FloatArray, y: FloatArray, keep: BooleanArray): DoubleArray? {
+        // Normal equations of the least-squares fit, as a 4 × 5 augmented matrix.
         val a = Array(4) { DoubleArray(5) }
-        for (i in t.indices) {
-            if (!keep[i]) continue
-            val p = doubleArrayOf(1.0, t[i].toDouble(), (t[i] * t[i]).toDouble(), (t[i] * t[i] * t[i]).toDouble())
-            for (r in 0 until 4) {
-                for (c in 0 until 4) a[r][c] += p[r] * p[c]
-                a[r][4] += p[r] * y[i]
-            }
-        }
+        for (i in t.indices) if (keep[i]) addSample(a, t[i], y[i])
         // Gaussian elimination with partial pivoting.
-        for (col in 0 until 4) {
-            val piv = (col until 4).maxBy { abs(a[it][col]) }
-            if (abs(a[piv][col]) < 1e-12) return null
-            val tmp = a[col]; a[col] = a[piv]; a[piv] = tmp
-            for (r in 0 until 4) {
-                if (r == col) continue
-                val f = a[r][col] / a[col][col]
-                for (c in col until 5) a[r][c] -= f * a[col][c]
-            }
-        }
+        for (col in 0 until 4) if (!eliminate(a, col)) return null
         return DoubleArray(4) { a[it][4] / a[it][it] }
+    }
+
+    /** Adds the point (t, y) to the normal equations [a] of a cubic fit. */
+    private fun addSample(a: Array<DoubleArray>, t: Float, y: Float) {
+        val p = doubleArrayOf(1.0, t.toDouble(), (t * t).toDouble(), (t * t * t).toDouble())
+        for (r in 0 until 4) {
+            for (c in 0 until 4) a[r][c] += p[r] * p[c]
+            a[r][4] += p[r] * y
+        }
+    }
+
+    /** Clears column [col] from every other row of [a]; false when the system has no unique solution. */
+    private fun eliminate(a: Array<DoubleArray>, col: Int): Boolean {
+        val pivot = (col until 4).maxBy { abs(a[it][col]) }
+        if (abs(a[pivot][col]) < 1e-12) return false
+        val swapped = a[col]; a[col] = a[pivot]; a[pivot] = swapped
+        for (r in 0 until 4) {
+            if (r == col) continue
+            val f = a[r][col] / a[col][col]
+            for (c in col until 5) a[r][c] -= f * a[col][c]
+        }
+        return true
     }
 }

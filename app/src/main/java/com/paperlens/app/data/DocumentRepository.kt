@@ -1,32 +1,26 @@
 package com.paperlens.app.data
 
-import com.paperlens.app.S
-import com.paperlens.app.R
-
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.PointF
 import android.net.Uri
+import com.paperlens.app.R
+import com.paperlens.app.S
 import com.paperlens.app.imaging.BitmapUtils
 import com.paperlens.app.imaging.DocumentDetector
 import com.paperlens.app.imaging.ImageFilter
 import com.paperlens.app.imaging.ImageProcessor
 import com.paperlens.app.imaging.PageComposer
 import com.paperlens.app.imaging.PageOutline
-import com.paperlens.app.ml.Ocr
 import com.paperlens.app.ml.OcrScript
 import com.paperlens.app.ml.SearchableText
-import com.paperlens.app.word.DocxReader
-import com.paperlens.app.word.DocxWriter
-import com.paperlens.app.word.WordDocument
-import com.paperlens.app.word.WordThumbnail
+import com.paperlens.app.runLogged
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -38,11 +32,11 @@ import java.util.UUID
  * Every page keeps its untouched scan ("original") so filters and rotation stay non-destructive.
  */
 class DocumentRepository(
-    private val context: Context,
-    private val dao: DocumentDao,
+    internal val context: Context,
+    internal val dao: DocumentDao,
     private val settings: SettingsStore,
 ) {
-    private val root = File(context.filesDir, "documents")
+    internal val root = File(context.filesDir, "documents")
 
     fun observeDocuments(query: String, tag: String?): Flow<List<DocumentSummary>> = dao.observeDocuments(query, tag)
     fun observeTags(): Flow<List<String>> = dao.observeTags()
@@ -180,7 +174,7 @@ class DocumentRepository(
         dao.touchDocument(documentId, System.currentTimeMillis())
         val s = settings.current()
         if (s.autoOcr) {
-            dao.getPages(documentId).filter { it.ocrText == null }.forEach { runCatching { ocrPage(it, s.ocrScript) } }
+            dao.getPages(documentId).filter { it.ocrText == null }.forEach { runLogged("DocumentRepository", "Automatic text recognition of page ${it.id}") { ocrPage(it, s.ocrScript) } }
         }
     }
 
@@ -398,10 +392,10 @@ class DocumentRepository(
                     .put("ocrLayout", p.ocrLayout ?: JSONObject.NULL),
             )
         }
-        runCatching { sessionFile.writeText(JSONObject().put("documentId", s.documentId).put("pages", pages).toString()) }
+        runLogged("DocumentRepository", "Saving the edit session") { sessionFile.writeText(JSONObject().put("documentId", s.documentId).put("pages", pages).toString()) }
     }
 
-    private fun loadSession(): EditSession? = runCatching {
+    private fun loadSession(): EditSession? = runLogged("DocumentRepository", "Reading the saved edit session") {
         val file = File(context.filesDir, "edit_session.json")
         if (!file.exists()) return null
         val json = JSONObject(file.readText())
@@ -557,62 +551,20 @@ class DocumentRepository(
         editPage(updated, page.imageFilter, page.rotation)
     }
 
-    // ---- Word documents --------------------------------------------------------------------------
-
-    /** Saves [doc] as a new Word document (in [folderId]) and returns its id. */
-    suspend fun createWordDocument(title: String, doc: WordDocument, folderId: Long? = null): Long = withContext(Dispatchers.IO) {
-        val now = System.currentTimeMillis()
-        val id = dao.insertDocument(DocumentEntity(title = title, createdAt = now, updatedAt = now, folderId = folderId))
-        writeWord(id, doc)
-        id
-    }
-
-    /** Imports a .docx file (kept byte for byte) as a Word document. */
-    suspend fun importDocx(uri: Uri, title: String): Long = withContext(Dispatchers.IO) {
-        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Cannot open the file")
-        val doc = DocxReader.read(bytes) // throws for files that are not Word documents
-        val now = System.currentTimeMillis()
-        val id = dao.insertDocument(DocumentEntity(title = title, createdAt = now, updatedAt = now))
-        val file = File(documentDir(id), "document.docx").apply { writeBytes(bytes) }
-        val cover = writeCover(id, doc)
-        dao.getDocument(id)?.let { dao.updateDocument(it.copy(wordPath = file.path, wordCover = cover.path)) }
-        id
-    }
-
-    suspend fun loadWord(documentId: Long): WordDocument = withContext(Dispatchers.IO) {
-        val path = dao.getDocument(documentId)?.wordPath ?: error("Not a Word document")
-        DocxReader.read(File(path))
-    }
-
-    suspend fun saveWord(documentId: Long, doc: WordDocument) = withContext(Dispatchers.IO) { writeWord(documentId, doc) }
-
-    private suspend fun writeWord(id: Long, doc: WordDocument) {
-        val file = File(documentDir(id), "document.docx")
-        DocxWriter.write(doc, file)
-        val cover = writeCover(id, doc)
-        val entity = dao.getDocument(id) ?: return
-        dao.updateDocument(entity.copy(wordPath = file.path, wordCover = cover.path, updatedAt = System.currentTimeMillis()))
-    }
-
-    /** A fresh cover file each time (lists cache pictures by path). */
-    private suspend fun writeCover(id: Long, doc: WordDocument): File {
-        val old = dao.getDocument(id)?.wordCover
-        val cover = File(documentDir(id), "cover_${System.currentTimeMillis()}.jpg")
-        BitmapUtils.saveJpeg(WordThumbnail.render(doc, 420), cover, 85)
-        old?.let { if (it != cover.path) File(it).delete() }
-        return cover
-    }
-
     /** "Copy": a full duplicate of the document next to it (same folder). */
     suspend fun duplicateDocument(documentId: Long): Long {
         val doc = dao.getDocument(documentId) ?: return documentId
-        doc.wordPath?.let { path ->
+        (doc.wordPath ?: doc.excelPath)?.let { path ->
             return withContext(Dispatchers.IO) {
                 val now = System.currentTimeMillis()
                 val id = dao.insertDocument(DocumentEntity(title = "${doc.title} (copy)", createdAt = now, updatedAt = now, folderId = doc.folderId))
-                val file = File(path).copyTo(File(documentDir(id), "document.docx"), overwrite = true)
+                val file = File(path).copyTo(File(documentDir(id), File(path).name), overwrite = true)
                 val cover = doc.wordCover?.let { File(it).copyTo(File(documentDir(id), "cover_${now}.jpg"), overwrite = true) }
-                dao.getDocument(id)?.let { dao.updateDocument(it.copy(wordPath = file.path, wordCover = cover?.path)) }
+                dao.getDocument(id)?.let {
+                    dao.updateDocument(
+                        if (doc.isWord) it.copy(wordPath = file.path, wordCover = cover?.path) else it.copy(excelPath = file.path, wordCover = cover?.path),
+                    )
+                }
                 id
             }
         }
@@ -657,68 +609,11 @@ class DocumentRepository(
         dao.getPages(documentId).forEach { page -> bakeEdit(page) { PageComposer.timestamp(it, text) } }
     }
 
-    // ---- folders --------------------------------------------------------------------------------
-
-    /** Folders directly inside [parentId] (null = top level). */
-    fun observeFolders(parentId: Long?): Flow<List<FolderSummary>> = dao.observeFolders(parentId)
-    fun observeFolder(id: Long): Flow<FolderEntity?> = dao.observeFolder(id)
-    fun observeFolderDocuments(folderId: Long?): Flow<List<DocumentSummary>> = dao.observeFolderDocuments(folderId)
-    suspend fun getFolders() = dao.getFolders()
-
-    /** Every folder with its full path ("Work / 2026 / Invoices"), sorted by path. */
-    suspend fun folderPaths(): List<Pair<FolderEntity, String>> {
-        val all = dao.getFolders()
-        val byId = all.associateBy { it.id }
-        fun path(f: FolderEntity, depth: Int = 0): String {
-            val parent = f.parentId?.let { byId[it] }
-            return if (parent == null || depth > 32) f.name else path(parent, depth + 1) + " / " + f.name
-        }
-        return all.map { it to path(it) }.sortedBy { it.second.lowercase() }
+    /** Stamps a page number on every page: [label] gets the page's number (from [start]) and the page count. */
+    suspend fun stampPageNumbers(documentId: Long, start: Int, place: PageComposer.NumberPlace, label: (number: Int, count: Int) -> String) {
+        val pages = dao.getPages(documentId)
+        pages.forEachIndexed { i, page -> bakeEdit(page) { PageComposer.pageNumber(it, label(start + i, pages.size), place) } }
     }
 
-    suspend fun createFolder(name: String, parentId: Long? = null): Long = dao.insertFolder(
-        FolderEntity(name = name.trim().ifEmpty { S.str(R.string.new_folder) }, createdAt = System.currentTimeMillis(), parentId = parentId),
-    )
-
-    suspend fun renameFolder(id: Long, name: String) {
-        if (name.isNotBlank()) dao.renameFolder(id, name.trim())
-    }
-
-    /** Deletes the folder only; its documents and sub-folders move up into the enclosing folder. */
-    suspend fun deleteFolder(id: Long) {
-        val parent = dao.getFolder(id)?.parentId
-        dao.releaseFolder(id, parent)
-        dao.reparentChildren(id, parent)
-        dao.deleteFolder(id)
-    }
-
-    suspend fun moveToFolder(documentIds: List<Long>, folderId: Long?) = dao.moveToFolder(documentIds, folderId)
-
-    // ---- stats ----------------------------------------------------------------------------------
-
-    fun observeDocumentCount(): Flow<Int> = dao.observeDocumentCount()
-    fun observePageCount(): Flow<Int> = dao.observePageCount()
-
-    suspend fun storageBytes(): Long = withContext(Dispatchers.IO) {
-        root.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-    }
-
-    // ---- QR history -----------------------------------------------------------------------------
-
-    suspend fun addQr(value: String, format: String) =
-        dao.insertQr(QrHistoryEntity(value = value, format = format, scannedAt = System.currentTimeMillis()))
-
-    suspend fun clearQrHistory() = dao.clearQrHistory()
-
-    // ---- signatures -----------------------------------------------------------------------------
-
-    val signatureDir: File get() = File(context.filesDir, "signatures").apply { mkdirs() }
-
-    fun signatures(): List<File> =
-        signatureDir.listFiles { f -> f.extension == "png" }?.sortedByDescending { it.lastModified() } ?: emptyList()
-
-    fun saveSignature(bitmap: Bitmap): File =
-        BitmapUtils.savePng(bitmap, File(signatureDir, "sig_${System.currentTimeMillis()}.png"))
-
-    private fun documentDir(id: Long) = File(root, id.toString()).apply { mkdirs() }
+    internal fun documentDir(id: Long) = File(root, id.toString()).apply { mkdirs() }
 }

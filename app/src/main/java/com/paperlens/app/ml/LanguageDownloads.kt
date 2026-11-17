@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.paperlens.app.runLogged
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -69,12 +70,12 @@ object LanguageDownloads {
 
     /** Downloads every language of [tags] that is missing, one after another, with progress. */
     suspend fun ensure(tags: Collection<String>) {
-        val have = runCatching { DocTranslator.downloaded() }.getOrDefault(emptySet())
+        val have = runLogged("LanguageDownloads", "Listing downloaded languages") { DocTranslator.downloaded() }.getOrDefault(emptySet())
         for (tag in tags.filter { it !in have }) {
             val running = jobs[tag]
             if (running?.isActive == true) running.join() else download(tag)
         }
-        val still = runCatching { DocTranslator.downloaded() }.getOrDefault(emptySet())
+        val still = runLogged("LanguageDownloads", "Listing downloaded languages") { DocTranslator.downloaded() }.getOrDefault(emptySet())
         val missing = tags.filter { it !in still }
         if (missing.isNotEmpty()) throw DocTranslator.Failure("${missing.joinToString { DocTranslator.displayName(it) }} did not finish downloading. Try again.")
     }
@@ -82,7 +83,7 @@ object LanguageDownloads {
     /** Stops a download (removes it from the system download queue too). */
     fun cancel(tag: String) {
         jobs.remove(tag)?.cancel()
-        runCatching { ourDownloads().filter { it.running }.forEach { manager().remove(it.id) } }
+        runLogged("LanguageDownloads", "Cancelling running downloads") { ourDownloads().filter { it.running }.forEach { manager().remove(it.id) } }
         activeState.value = activeState.value - tag
         if (activeState.value.isEmpty()) NotificationManagerCompat.from(app).cancel(NOTIFICATION)
     }
@@ -143,7 +144,7 @@ object LanguageDownloads {
     }
 
     private fun readProgress(): Progress? {
-        val running = runCatching { ourDownloads() }.getOrNull()?.filter { it.running } ?: return null
+        val running = runLogged("LanguageDownloads", "Reading download progress") { ourDownloads() }.getOrNull()?.filter { it.running } ?: return null
         if (running.isEmpty()) return Progress(0, 0, "Preparing…")
         val bytes = running.sumOf { it.bytes.coerceAtLeast(0) }
         val total = if (running.all { it.total > 0 }) running.sumOf { it.total } else -1

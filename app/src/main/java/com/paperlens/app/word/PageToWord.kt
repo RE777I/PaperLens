@@ -9,16 +9,15 @@ import com.google.mlkit.vision.text.Text
 import com.paperlens.app.imaging.BitmapUtils
 import com.paperlens.app.ml.Ocr
 import com.paperlens.app.ml.OcrScript
+import com.paperlens.app.runLogged
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.roundToLong
 
 /** Ink at least this light (on white paper, 0..255) is pencil rather than print. */
 private const val LIGHT_INK = 150
@@ -53,7 +52,7 @@ object PageToWord {
                 BitmapUtils.decode(file, WORK).let { b -> rotations.getOrNull(index)?.takeIf { it % 360 != 0 }?.let { BitmapUtils.rotate(b, it) } ?: b }
             }
             val text = Ocr.recognizeText(context, bitmap, script)
-            val codes = runCatching {
+            val codes = runLogged("PageToWord", "Finding barcodes and QR codes") {
                 val scanner = BarcodeScanning.getClient()
                 try {
                     scanner.process(InputImage.fromBitmap(bitmap, 0)).await().mapNotNull { it.boundingBox?.let(::RectF) }
@@ -86,40 +85,40 @@ internal class PageDebug(
 )
 
 internal class PageBuilder(
-    private val bitmap: Bitmap,
+    internal val bitmap: Bitmap,
     private val text: Text,
-    private val codes: List<RectF>,
-    private val mediaPrefix: String,
+    internal val codes: List<RectF>,
+    internal val mediaPrefix: String,
     /** Page setup of the first page, reused for the following pages. */
     private val fixedSetup: PageSetup?,
 ) {
-    private val a = PageAnalysis(bitmap)
-    private val w = bitmap.width
-    private val h = bitmap.height
-    private val media = LinkedHashMap<String, WMedia>()
+    internal val a = PageAnalysis(bitmap)
+    internal val w = bitmap.width
+    internal val h = bitmap.height
+    internal val media = LinkedHashMap<String, WMedia>()
 
     // Page geometry: the photo of the page maps onto an A4 sheet (landscape for wide pages).
     private val landscape = w > h * 1.08f
     private val pageW = if (landscape) PageSetup.A4_HEIGHT else PageSetup.A4_WIDTH
     private val pageH = if (landscape) PageSetup.A4_WIDTH else PageSetup.A4_HEIGHT
     /** Twips per pixel: the page's width maps onto the sheet (scaled down for close-up photos, see build). */
-    private var tw = pageW.toFloat() / w
-    private val emu: Float get() = tw * 635f // EMU per pixel
-    private lateinit var setup: PageSetup
+    internal var tw = pageW.toFloat() / w
+    internal val emu: Float get() = tw * 635f // EMU per pixel
+    internal lateinit var setup: PageSetup
     /** Typical text size on the page (px), to tell headings from body text. */
     private var bodyEm = 0f
 
-    private class Seg(val words: List<OcrWord>) {
+    internal class Seg(val words: List<OcrWord>) {
         val box = RectF(words[0].box).apply { words.forEach { union(it.box) } }
         val em = PageAnalysis.median(words.map { it.em })
     }
 
-    private class Row(val segs: List<Seg>) {
+    internal class Row(val segs: List<Seg>) {
         val box = RectF(segs[0].box).apply { segs.forEach { union(it.box) } }
     }
 
     /** Something placed on the page from top to bottom. */
-    private sealed class Item(val top: Float, val bottom: Float) {
+    internal sealed class Item(val top: Float, val bottom: Float) {
         class Lines(val rows: List<Row>) : Item(rows.first().box.top, rows.last().box.bottom)
         class Table(val table: WTable, val box: RectF) : Item(box.top, box.bottom)
         class Picture(val rect: RectF) : Item(rect.top, rect.bottom)
@@ -162,7 +161,8 @@ internal class PageBuilder(
         }
     }
 
-    fun build(): PageResult {
+    /** The page's words with their size, weight, colour and boldness measured (also used by To Excel). */
+    internal fun readWords(): List<OcrWord> {
         val words = ArrayList<OcrWord>()
         text.textBlocks.forEachIndexed { bi, block ->
             block.lines.forEachIndexed { li, line ->
@@ -197,22 +197,18 @@ internal class PageBuilder(
             val bodyPt = body[body.size / 2] * tw / 20f
             if (bodyPt > 14f) tw *= 12f / bodyPt
         }
-        val textHeight = PageAnalysis.median(words.map { it.box.height() }).takeIf { it > 0 } ?: (h / 80f)
         decideBold(words)
+        return words
+    }
+
+    fun build(): PageResult {
+        val words = readWords()
+        val textHeight = PageAnalysis.median(words.map { it.box.height() }).takeIf { it > 0 } ?: (h / 80f)
 
         val (hRules, vRules) = a.rules(textHeight)
-        val grids = a.gridTables(hRules, vRules, textHeight).filter { g -> plausibleGrid(g, words, textHeight) }.map { a.splitByText(it, words) }
+        val grids = a.gridTables(hRules, vRules, textHeight).filter { g -> g.plausible(words, textHeight) }.map { a.splitByText(it, words) }
         val gridBoxes = grids.map { it.box }
-        val bands = a.bandTables(gridBoxes, textHeight).filter { band ->
-            // A real table of shaded rows has text in most rows (a photo's dark stretches have none).
-            val rowsWithText = (0 until band.rowEdges.size - 1).count { r ->
-                words.any { wd ->
-                    val cy = wd.box.centerY()
-                    cy >= band.rowEdges[r] && cy < band.rowEdges[r + 1] && wd.box.centerX() in band.box.left..band.box.right
-                }
-            }
-            gridBoxes.none { RectF.intersects(it, band.box) } && rowsWithText >= (band.rowEdges.size - 1) * 0.6f
-        }
+        val bands = a.bandTables(gridBoxes, textHeight).filter { it.plausible(words, gridBoxes) }
         val bandBoxes = bands.map { it.box }
         // Handwriting (notes in the margin, answers filled in) reads badly: the OCR is unsure of it and the
         // pencil is light. Keep it as pictures at its place, like the printed page around it.
@@ -270,22 +266,6 @@ internal class PageBuilder(
                 grids.flatMap { it.rows + it.cols },
             ),
         )
-    }
-
-    /**
-     * A ruled table worth keeping: columns wide enough for text, and text or pictures in a good share of
-     * its cells (shading edges and photo outlines can look like grids of thin empty cells).
-     */
-    private fun plausibleGrid(g: GridTable, words: List<OcrWord>, textHeight: Float): Boolean {
-        val nc = g.cols.size - 1
-        val narrow = (0 until nc).count { g.colX(it + 1) - g.colX(it) < textHeight * 1.5f }
-        if (narrow * 3 > nc) return false
-        if (g.cells.size <= 1) return words.any { g.box.contains(it.box.centerX(), it.box.centerY()) }
-        val filled = g.cells.count { cell ->
-            val r = g.cellRect(cell)
-            words.any { r.contains(it.box.centerX(), it.box.centerY()) }
-        }
-        return filled * 10 >= g.cells.size * 3
     }
 
     // ---- page setup ------------------------------------------------------------------------------
@@ -361,7 +341,7 @@ internal class PageBuilder(
     }
 
     /** Words grouped into segments (split at wide gaps) and segments sharing a height into rows. */
-    private fun rows(words: List<OcrWord>): List<Row> {
+    internal fun rows(words: List<OcrWord>): List<Row> {
         val segs = ArrayList<Seg>()
         for ((_, line) in words.groupBy { it.line }) {
             val sorted = line.sortedBy { it.box.left }
@@ -597,7 +577,7 @@ internal class PageBuilder(
     }
 
     /** Words of a segment as runs, with spaces where the words have a gap between them. */
-    private fun runsOf(s: Seg): List<WRun> {
+    internal fun runsOf(s: Seg): List<WRun> {
         val out = ArrayList<WRun>()
         s.words.forEachIndexed { i, wd ->
             val style = styleOf(wd, s)
@@ -617,11 +597,11 @@ internal class PageBuilder(
 
     private fun isCjk(c: Char) = c.code in 0x2E80..0x9FFF || c.code in 0xAC00..0xD7AF || c.code in 0x3040..0x30FF || c.code in 0xFF00..0xFFEF
 
-    private fun styleOf(wd: OcrWord, s: Seg): RunStyle = RunStyle(bold = wd.bold, size = ptOf(s.em), color = wd.color)
+    internal fun styleOf(wd: OcrWord, s: Seg): RunStyle = RunStyle(bold = wd.bold, size = ptOf(s.em), color = wd.color)
 
-    private fun ptOf(emPx: Float): Float = ((emPx * tw / 20f) * 2).roundToInt().coerceIn(8, 400) / 2f
+    internal fun ptOf(emPx: Float): Float = ((emPx * tw / 20f) * 2).roundToInt().coerceIn(8, 400) / 2f
 
-    private fun merge(runs: List<WRun>): List<WRun> {
+    internal fun merge(runs: List<WRun>): List<WRun> {
         val out = ArrayList<WRun>()
         for (r in runs) {
             val last = out.lastOrNull()
@@ -632,228 +612,5 @@ internal class PageBuilder(
             }
         }
         return out
-    }
-
-    // ---- tables ----------------------------------------------------------------------------------
-
-    private fun gridTable(g: GridTable, words: List<OcrWord>, pics: List<RectF>): WTable {
-        val nr = g.rows.size - 1
-        val nc = g.cols.size - 1
-        val colX = FloatArray(nc + 1) { g.colX(it) }
-        val rowY = FloatArray(nr + 1) { g.rowY(it) }
-        val grid = (0 until nc).map { ((colX[it + 1] - colX[it]) * tw).roundToInt().coerceAtLeast(60) }
-        val regionAt = Array(nr) { arrayOfNulls<GridCell>(nc) }
-        for (c in g.cells) for (r in c.r0..c.r1) for (cc in c.c0..c.c1) regionAt[r][cc] = c
-        // Words and pictures into cells.
-        val cellWords = HashMap<GridCell, MutableList<OcrWord>>()
-        for (wd in words) {
-            val (r, c) = g.locate(wd.box.centerX(), wd.box.centerY()) ?: continue
-            val cell = regionAt[r][c] ?: continue
-            cellWords.getOrPut(cell) { ArrayList() } += wd
-        }
-        val cellPics = HashMap<GridCell, MutableList<RectF>>()
-        for (p in pics) {
-            val (r, c) = g.locate(p.centerX(), p.centerY()) ?: continue
-            val cell = regionAt[r][c] ?: continue
-            cellPics.getOrPut(cell) { ArrayList() } += p
-        }
-        val thickness = (g.rows + g.cols).map { it.thickness }.sorted().let { it[it.size / 2] }
-        val border = WBorder((thickness * tw / 20 * 8).roundToInt().coerceIn(4, 18), lineColor(g))
-        val rows = (0 until nr).map { r ->
-            val cells = ArrayList<WCell>()
-            var c = 0
-            while (c < nc) {
-                val region = regionAt[r][c] ?: GridCell(r, c, r, c)
-                val span = region.c1 - region.c0 + 1
-                if (region.r0 == r) {
-                    val rect = g.cellRect(region)
-                    val width = (region.c0..region.c1).sumOf { grid[it] }
-                    val (blocks, vAlign) = cellContent(cellWords[region].orEmpty(), cellPics[region].orEmpty(), rect, width)
-                    cells += WCell(
-                        blocks = blocks,
-                        span = span,
-                        vMerge = if (region.r1 > region.r0) VMerge.RESTART else VMerge.NONE,
-                        vAlign = vAlign,
-                        shading = cellShade(rect),
-                    )
-                } else {
-                    cells += WCell(blocks = listOf(WParagraph()), span = span, vMerge = VMerge.CONTINUE)
-                }
-                c += span
-            }
-            WRow(cells, height = ((rowY[r + 1] - rowY[r]) * tw).roundToInt().coerceAtLeast(120))
-        }
-        return WTable(
-            grid = grid,
-            rows = rows,
-            indent = ((colX[0] * tw) - setup.marginLeft).roundToInt().coerceAtLeast(0),
-            borders = WBorders(border, border, border, border, border, border),
-            cellMarginH = 80,
-        )
-    }
-
-    private fun bandTable(b: BandTable, words: List<OcrWord>): WTable {
-        val nRows = b.rowEdges.size - 1
-        // Columns: where text parts start, when several rows agree.
-        val rows = rows(words)
-        val starts = rows.flatMap { r -> r.segs.map { it.box.left } }.sorted()
-        val colStarts = ArrayList<Float>()
-        var i = 0
-        while (i < starts.size) {
-            var j = i
-            while (j + 1 < starts.size && starts[j + 1] - starts[i] < w * 0.025f) j++
-            if (j - i + 1 >= 2) colStarts += starts.subList(i, j + 1).average().toFloat()
-            i = j + 1
-        }
-        if (colStarts.isEmpty() || colStarts[0] > b.box.left + w * 0.05f) colStarts.add(0, b.box.left)
-        val edges = ArrayList<Float>()
-        edges += b.box.left
-        for (k in 1 until colStarts.size) edges += colStarts[k] - w * 0.01f
-        edges += b.box.right
-        val nCols = edges.size - 1
-        val grid = (0 until nCols).map { ((edges[it + 1] - edges[it]) * tw).roundToInt().coerceAtLeast(60) }
-        val cellWords = Array(nRows) { Array(nCols) { ArrayList<OcrWord>() } }
-        for (wd in words) {
-            val cy = wd.box.centerY()
-            val r = (0 until nRows).firstOrNull { cy >= b.rowEdges[it] && cy < b.rowEdges[it + 1] } ?: continue
-            val cx = wd.box.left + 1
-            val c = (0 until nCols).lastOrNull { cx >= edges[it] } ?: 0
-            cellWords[r][c] += wd
-        }
-        val tableRows = (0 until nRows).map { r ->
-            val cells = (0 until nCols).map { c ->
-                val rect = RectF(edges[c], b.rowEdges[r], edges[c + 1], b.rowEdges[r + 1])
-                val (blocks, vAlign) = cellContent(cellWords[r][c], emptyList(), rect, grid[c])
-                WCell(blocks = blocks, vAlign = vAlign, shading = b.rowShade[r])
-            }
-            WRow(cells, height = ((b.rowEdges[r + 1] - b.rowEdges[r]) * tw).roundToInt().coerceAtLeast(120))
-        }
-        return WTable(
-            grid = grid,
-            rows = tableRows,
-            indent = ((b.box.left * tw) - setup.marginLeft).roundToInt().coerceAtLeast(0),
-            borders = WBorders.NONE,
-            cellMarginH = 80,
-        )
-    }
-
-    /** Paragraphs (and pictures) of one cell, plus its vertical alignment. */
-    private fun cellContent(words: List<OcrWord>, pics: List<RectF>, rect: RectF, widthTw: Int): Pair<List<WBlock>, VAlign> {
-        val rows = rows(words)
-        val items = ArrayList<Pair<Float, WBlock>>()
-        // Lines into paragraphs: a line that ends early is a deliberate break, a full one wraps.
-        val groups = ArrayList<MutableList<Row>>()
-        for (row in rows) {
-            val prev = groups.lastOrNull()?.last()
-            if (prev != null && row.box.top - prev.box.bottom < prev.box.height() * 0.9f &&
-                abs(row.segs[0].em - prev.segs[0].em) < prev.segs[0].em * 0.2f
-            ) groups.last() += row else groups += mutableListOf(row)
-        }
-        for (g in groups) {
-            val runs = ArrayList<WRun>()
-            g.forEachIndexed { i, row ->
-                if (i > 0) {
-                    val prev = g[i - 1]
-                    val full = rect.right - prev.box.right < rect.width() * 0.22f
-                    val s = prev.segs.last()
-                    runs += WRun(if (full) " " else "\n", styleOf(s.words.last(), s))
-                }
-                row.segs.forEachIndexed { k, s ->
-                    if (k > 0) runs += WRun(" ", styleOf(s.words[0], s))
-                    runs += runsOf(s)
-                }
-            }
-            val box = RectF(g[0].box).apply { g.forEach { union(it.box) } }
-            val leftGap = box.left - rect.left
-            val rightGap = rect.right - box.right
-            val align = when {
-                abs(leftGap - rightGap) < rect.width() * 0.08f && leftGap > rect.width() * 0.12f -> WAlign.CENTER
-                rightGap < rect.width() * 0.06f && leftGap > rect.width() * 0.3f -> WAlign.RIGHT
-                else -> WAlign.LEFT
-            }
-            items += box.top to WParagraph(runs = merge(runs), align = align)
-        }
-        for (p in pics) {
-            val maxW = ((widthTw - 160) * 635L).coerceAtLeast(635L * 200)
-            var image = pictureImage(p, float = false)
-            if (image.widthEmu > maxW) {
-                val f = maxW.toDouble() / image.widthEmu
-                image = image.copy(widthEmu = maxW, heightEmu = (image.heightEmu * f).roundToLong())
-            }
-            val cx = p.centerX() - rect.centerX()
-            val align = if (abs(cx) < rect.width() * 0.1f) WAlign.CENTER else if (cx > 0) WAlign.RIGHT else WAlign.LEFT
-            items += p.top to WParagraph(runs = listOf(WRun(image = image)), align = align)
-        }
-        if (items.isEmpty()) return listOf<WBlock>(WParagraph(runs = listOf(WRun("", RunStyle(size = ptOf(PageAnalysis.median(words.map { it.em }).takeIf { it > 0 } ?: 30f)))))) to VAlign.CENTER
-        val contentTop = min(words.minOfOrNull { it.box.top } ?: Float.MAX_VALUE, pics.minOfOrNull { it.top } ?: Float.MAX_VALUE)
-        val contentBottom = max(words.maxOfOrNull { it.box.bottom } ?: 0f, pics.maxOfOrNull { it.bottom } ?: 0f)
-        val topGap = contentTop - rect.top
-        val bottomGap = rect.bottom - contentBottom
-        val vAlign = when {
-            abs(topGap - bottomGap) < rect.height() * 0.15f -> VAlign.CENTER
-            bottomGap < topGap * 0.5f -> VAlign.BOTTOM
-            else -> if (topGap > rect.height() * 0.25f) VAlign.CENTER else VAlign.TOP
-        }
-        return items.sortedBy { it.first }.map { it.second } to vAlign
-    }
-
-    /** Fill colour of a cell when it is clearly not white. */
-    private fun cellShade(rect: RectF): Int? {
-        var n = 0; var r = 0L; var g = 0L; var b = 0L
-        val x0 = (rect.left + rect.width() * 0.08f).toInt().coerceIn(0, w - 1)
-        val x1 = (rect.right - rect.width() * 0.08f).toInt().coerceIn(x0 + 1, w)
-        val y0 = (rect.top + rect.height() * 0.15f).toInt().coerceIn(0, h - 1)
-        val y1 = (rect.bottom - rect.height() * 0.15f).toInt().coerceIn(y0 + 1, h)
-        for (y in y0 until y1 step 3) for (x in x0 until x1 step 3) {
-            if (a.ink[y * w + x]) continue
-            val c = a.rgb(x, y)
-            r += (c shr 16) and 0xFF; g += (c shr 8) and 0xFF; b += c and 0xFF; n++
-        }
-        if (n < 20) return null
-        val c = ((r / n).toInt() shl 16) or ((g / n).toInt() shl 8) or (b / n).toInt()
-        val luma = (((c shr 16) and 0xFF) * 299 + ((c shr 8) and 0xFF) * 587 + (c and 0xFF) * 114) / 1000
-        return if (luma < a.paper - 22) a.lighten(c) else null
-    }
-
-    private fun lineColor(g: GridTable): Int? {
-        val samples = ArrayList<Int>()
-        for (r in g.rows) {
-            var x = r.start
-            while (x < r.end) {
-                val y = r.at(x).roundToInt()
-                if (y in 0 until h) {
-                    // darkest pixel within the line's thickness
-                    var best = -1; var bestG = 256
-                    for (dy in -2..2) {
-                        val yy = (y + dy).coerceIn(0, h - 1)
-                        val gv = a.g(x.toInt().coerceIn(0, w - 1), yy)
-                        if (gv < bestG) { bestG = gv; best = a.rgb(x.toInt().coerceIn(0, w - 1), yy) }
-                    }
-                    if (best >= 0) samples += best
-                }
-                x += 9f
-            }
-        }
-        return a.inkColor(samples)
-    }
-
-    // ---- pictures --------------------------------------------------------------------------------
-
-    private fun pictureImage(rect: RectF, float: Boolean): WImage {
-        val pad = w * 0.004f
-        val x0 = (rect.left - pad).toInt().coerceIn(0, w - 1)
-        val y0 = (rect.top - pad).toInt().coerceIn(0, h - 1)
-        val x1 = (rect.right + pad).toInt().coerceIn(x0 + 1, w)
-        val y1 = (rect.bottom + pad).toInt().coerceIn(y0 + 1, h)
-        val crop = Bitmap.createBitmap(bitmap, x0, y0, x1 - x0, y1 - y0)
-        val qr = codes.any { RectF.intersects(it, rect) }
-        val bytes = ByteArrayOutputStream().use { out ->
-            crop.compress(if (qr) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 90, out)
-            out.toByteArray()
-        }
-        val key = "$mediaPrefix${media.size + 1}"
-        media[key] = WMedia(bytes, if (qr) "png" else "jpg")
-        val f = if (float) WFloat((x0 * emu).roundToLong(), (y0 * emu).roundToLong()) else null
-        return WImage(key, ((x1 - x0) * emu).roundToLong(), ((y1 - y0) * emu).roundToLong(), f)
     }
 }

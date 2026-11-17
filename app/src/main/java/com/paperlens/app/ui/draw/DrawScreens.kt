@@ -1,8 +1,5 @@
 package com.paperlens.app.ui.draw
 
-import com.paperlens.app.S
-import com.paperlens.app.R
-
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -70,7 +67,11 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.paperlens.app.R
+import com.paperlens.app.S
 import com.paperlens.app.app
+import com.paperlens.app.data.saveSignature
+import com.paperlens.app.data.signatures
 import com.paperlens.app.imaging.BitmapUtils
 import com.paperlens.app.imaging.PageComposer
 import com.paperlens.app.ui.components.BusyOverlay

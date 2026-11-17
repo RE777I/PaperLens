@@ -1,8 +1,5 @@
 package com.paperlens.app.ui.qr
 
-import com.paperlens.app.S
-import com.paperlens.app.R
-
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,18 +30,22 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.paperlens.app.R
+import com.paperlens.app.S
 import com.paperlens.app.app
 import com.paperlens.app.data.QrHistoryEntity
+import com.paperlens.app.data.addQr
+import com.paperlens.app.data.clearQrHistory
 import com.paperlens.app.ui.components.QrResultDialog
 import com.paperlens.app.ui.components.barcodeFormatName
 import com.paperlens.app.ui.components.readCodesFromImage
-import com.paperlens.app.ui.components.toast
 import com.paperlens.app.ui.components.startQrScan
+import com.paperlens.app.ui.components.toast
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date

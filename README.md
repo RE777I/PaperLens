@@ -22,8 +22,9 @@ Four tabs, laid out like a typical scanner app:
 |---|---|
 | Scanning | ML Kit Document Scanner: live edge detection, auto-capture, perspective crop, stain/finger cleaning ("Smart Erase"), multi-page batch, gallery import; imported photos are auto-cropped and straightened. The in-app camera finds the page with a learned corner model (DocAligner, see below), then shows a crop screen with draggable corners and a magnifier. Gallery imports fall back to paper-colour and line finding; a page filling the photo except a strip of desk or hand is cropped like a scanner app does |
 | Modes | Document, Book (splits two-page spreads), ID card (front + back on one A4 sheet at real size), Whiteboard, Extract Text, Photo Translation, Timestamp, QR/barcode |
-| Convert | To Word creates a Word document next to the scan (opened for editing, not shared): the page layout is rebuilt like the original — headings at their size and weight, coloured text, ruled tables with merged cells, shaded-row tables, lines across the page, and photos, logos and QR codes cut out where they were (inline, inside table cells, or floating). Wrapped lines join into flowing paragraphs (no spaces between Chinese/Japanese lines, first-line indents kept); handwriting (notes, filled-in answers) is kept as small pictures of itself inside its sentence, and plain shading (shadows, tinted panels) is not mistaken for pictures. It reads the unfiltered scan, so faint table lines survive (word/PageToWord.kt, word/PageAnalysis.kt). To Excel (.xlsx, table rows rebuilt from text positions, numbers stored as numbers), PDF to images, PDF to long image |
+| Convert | To Word creates a Word document next to the scan (opened for editing, not shared): the page layout is rebuilt like the original — headings at their size and weight, coloured text, ruled tables with merged cells, shaded-row tables, lines across the page, and photos, logos and QR codes cut out where they were (inline, inside table cells, or floating). Wrapped lines join into flowing paragraphs (no spaces between Chinese/Japanese lines, first-line indents kept); handwriting (notes, filled-in answers) is kept as small pictures of itself inside its sentence, and plain shading (shadows, tinted panels) is not mistaken for pictures. It reads the unfiltered scan, so faint table lines survive (word/PageToWord.kt, word/PageAnalysis.kt). To Excel creates an Excel document next to the scan (opened in the sheet viewer): ruled tables keep their grid, merged cells, borders and shading; tables of shaded rows and borderless tables (timetables, price lists, nutrition labels) get their columns from the gaps in the text, side-by-side tables split at a divider line, and wrapped cell text stays in one cell. Header rows are bold (frozen for long tables), and amounts become real numbers that add up — thousands separators and decimals in either style (1,234.50 / 1.234,50), percentages, currency (Rp, $, ¥…) and dates. Light text on dark boards (green price boards) is read too (excel/PageToExcel.kt, excel/SheetBuilder.kt). PDF to images, PDF to long image |
 | Word documents | Word (.docx) files live in the library with a page preview and a W badge: from To Word, Import Files, or “Open with” / Share from other apps. They open as a page (pinch to zoom) and can be edited in place: tap text to type; bold / italic / underline, size, colour, alignment, lists, Title / Heading styles; insert paragraphs, tables (rows and columns, merged cells kept), pictures and page breaks; undo / redo. Changes stay unsaved until Save, and leaving asks to Save or Discard. Imported files keep their headers, footers and styles when saved. Share as .docx or text |
+| Excel documents | Excel (.xlsx) files live in the library with a sheet preview and an X badge: from To Excel, Import Files, or “Open with” / Share from other apps. They open as a grid like Excel: sheet tabs, column letters and row numbers, column widths and row heights, merged cells, fonts, fills, borders, alignment, frozen panes, and numbers, percentages, currency and dates shown in their number format; scroll with fling and pinch to zoom. Tap a cell to see its content (or formula); tap it again, or double-tap the cell, to edit. Edits stay unsaved until Save, which writes only the changed cells into the file (charts, pictures and other sheets are kept; Excel recalculates formulas on open). Share as .xlsx or text |
 | Page tools | Long-press pages in a document to select several, then edit (the editor's Filter applies to the selected pages; it can also be switched to This page or All pages), rotate, move (to the start, the end or after a page), share or delete them; extract pages into a new document, reorder pages, compress PDF, lock document |
 | Editing | Every change to an open document (Edit, Crop, Sign, Add Text, filters, page moves…) is a preview first: the document shows *Changes not saved yet* with Save / Discard, and Back asks before leaving (the preview survives the app being closed). Every page quietly keeps its original, uncropped photo (camera shots, imports, Add → Scan more pages, Retake, and through Add Text / Sign / drawings); Crop (page viewer, long-press a page, or Edit) shows that whole photo so the crop can be lined up again — after markup it warns that re-cropping starts from the original. Add Text has text colour and opacity, bold, italic, alignment, a background colour with its own opacity, size, and drag to place |
 | Camera | Live page outline steadied across frames; Auto capture ("Hold still…", a ring fills round the shutter) shoots once the page is still and then waits for the next page, like vFlat's auto-shoot. Batch shots fly into the tray and are cropped in the background; single shots open a crop screen. Crop screens have corner handles plus a handle in the middle of each side that moves the whole side (its corners slide along the neighbouring sides), a magnifier, and magnetic snapping: handles jump onto corners and straight edges found in the photo (with a haptic tick) |
@@ -40,9 +41,10 @@ Four tabs, laid out like a typical scanner app:
 | Export | PDF (A4 / Letter / fit, three quality levels, optional password), save PDF to device, JPG images, long image, TXT, Word (.docx, converted with the layout and shared directly), print. PDFs are **searchable**: the recognised text is hidden behind each scan (invisible text, any script including Chinese), so PDF readers can search, select and copy it (Settings → Share & Export → Searchable PDF, on by default). Pages imported from a PDF and left unchanged are exported as the original PDF pages |
 | Imported PDFs | Each page keeps its original PDF page alongside its picture. Zooming redraws the visible part from the PDF, so small print stays crisp at any zoom; the PDF's own text is stored at import, so Find Text and Edit Text work at once without OCR. Changing the picture (filter, rotation, re-crop, retake, signature or other marks) makes it a picture page; going back to Original without rotation brings the PDF back |
 | Import | Images, PDFs (each page becomes an editable page), "Share to PaperLens" from any app |
-| Security | App lock and per-document lock with fingerprint / face / device PIN. Phone backups to the cloud keep only the settings, never scans or the library (`res/xml/data_extraction_rules.xml`, `backup_rules.xml`); moving to a new phone by cable or Wi-Fi takes everything |
+| Security | App lock and per-document lock with fingerprint / face / device PIN. Phone backups to the cloud keep only the settings, never scans or the library (`res/xml/data_extraction_rules.xml`, `backup_rules.xml`); moving to a new phone by cable or Wi-Fi takes everything. Libraries come only from Google, JetBrains, Microsoft and Maven Central, have no known vulnerabilities (OSV, 2026-11-02), and add no permissions beyond fingerprint for the app lock |
 | Accessibility | Every button and switch has a name for TalkBack in the app's language: icon-only buttons, the search bar, each document's select box ("Select <title>"), and settings switches, which toggle as one row with their title |
-| QR / barcodes | Camera scan, or read every code in a saved photo (Me → Code history → image button); history of scanned codes |
+| QR / barcodes | Camera scan, or read every code in a saved photo (Me → Code history → image button); history of scanned codes. **Create Code** (Tools) makes a QR code from text, a link or a Wi-Fi network, to show or share as a picture |
+| Tools tab | Every tool that works on a document opens a picker that lists only the documents the tool can use, with a search box once the list is long and **Scan new** / **Import file** shortcuts that carry straight on into the tool. **Compress** shows the PDF's size at each quality before you choose, then shares it or saves it to the device; pages imported from a PDF are turned into pictures only when that is smaller, so the result never grows. **Page Numbers** draws a number on every page (four positions, three styles, any first number) |
 | Shortcuts | Long-press the launcher icon → *Scan document*, *Scan QR code* |
 
 ## Releases
@@ -61,9 +63,10 @@ The script refuses to run with uncommitted changes, bumps `versionName`/`version
 
 ## Build
 
-Requirements: Android Studio (Ladybug or newer, with JDK 17) and Android SDK 35.
+Requirements: Android Studio with Android Gradle Plugin 9.5 support (JDK 17 or newer) and Android SDK 37
+(the build compiles against Android 17 and targets Android 15).
 
-1. Open this folder in Android Studio and let it sync. It downloads Gradle 8.9 and creates the wrapper.
+1. Open this folder in Android Studio and let it sync. It downloads Gradle 9.8 and creates the wrapper.
 2. Run the `app` configuration on a device with Google Play services. The document scanner, code scanner
    and the non-Latin OCR models are delivered by Play services.
 
@@ -98,6 +101,10 @@ What keeps it small:
   script is used (`Ocr.ensureModuleInstalled`), which needs Google Play services and a network connection once.
 - **No BouncyCastle post-quantum tables.** `org/bouncycastle/pqc/**` resources (~8 MB) are excluded.
   PdfBox only needs the classic ciphers for password-protected PDFs.
+- **Pinned transitive libraries.** `app/build.gradle.kts` raises BouncyCastle (from PdfBox) to 1.86 and Guava (from
+  ML Kit and CameraX) to 33.7.2, because the versions they bring have published vulnerabilities. Check the whole
+  runtime classpath with `./gradlew :app:dependencies --configuration releaseRuntimeClasspath` against
+  [OSV](https://osv.dev) after changing libraries.
 
 #### Signing
 
@@ -152,11 +159,11 @@ These need a server, an account system or heavier on-device models:
 
 ## License
 
-PaperLens is licensed under the **PolyForm Strict License 1.0.0** (see [LICENSE.md](LICENSE.md)): you may use it for
-non-commercial purposes only, and you may not change it, build on it or distribute it. Anything else needs written
-permission from the author.
+PaperLens is free software under the **GNU General Public License, version 3 or later** (see
+[LICENSE.md](LICENSE.md)): you may use, study, change and share it, and anything you distribute that is built on it
+must be under the same license, with its source code. It comes with no warranty.
 
-Third-party parts keep their own licenses: the DocAligner model and PdfBox-Android (Apache License 2.0), ONNX Runtime
+Third-party parts keep their own licenses: the DocAligner model, PdfBox-Android and ZXing (Apache License 2.0), ONNX Runtime
 (MIT), Google ML Kit (Google APIs Terms of Service) and the AndroidX / Jetpack libraries (Apache License 2.0).
 
 ## Credits

@@ -64,6 +64,7 @@ import com.paperlens.app.export.Sharing
 import com.paperlens.app.ml.DocTranslator
 import com.paperlens.app.ml.LanguageDownloads
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.paperlens.app.runLogged
 import kotlinx.coroutines.launch
 
 /**
@@ -310,7 +311,7 @@ fun LanguageButton(caption: String, label: String, onClick: () -> Unit, modifier
 fun LanguagePicker(title: String, offerAuto: Boolean, selected: String?, onDismiss: () -> Unit, onPick: (String?) -> Unit) {
     var query by remember { mutableStateOf("") }
     var downloaded by remember { mutableStateOf(emptySet<String>()) }
-    LaunchedEffect(Unit) { downloaded = runCatching { DocTranslator.downloaded() }.getOrDefault(emptySet()) }
+    LaunchedEffect(Unit) { downloaded = runLogged("OcrTextSheet", "Listing downloaded languages") { DocTranslator.downloaded() }.getOrDefault(emptySet()) }
     val matches = DocTranslator.languages.filter { it.second.contains(query.trim(), ignoreCase = true) }
     val (have, rest) = matches.partition { it.first in downloaded }
 

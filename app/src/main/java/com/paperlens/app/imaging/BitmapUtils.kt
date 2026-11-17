@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
+import com.paperlens.app.runLogged
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -82,7 +83,7 @@ object BitmapUtils {
         }
     }
 
-    private fun exifRotation(input: InputStream): Int = runCatching {
+    private fun exifRotation(input: InputStream): Int = runLogged("BitmapUtils", "Reading the photo's EXIF rotation") {
         when (ExifInterface(input).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
             ExifInterface.ORIENTATION_ROTATE_90 -> 90
             ExifInterface.ORIENTATION_ROTATE_180 -> 180

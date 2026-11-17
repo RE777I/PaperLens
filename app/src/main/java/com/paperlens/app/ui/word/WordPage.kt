@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.paperlens.app.runLogged
 import com.paperlens.app.word.BlockPath
 import com.paperlens.app.word.LineRule
 import com.paperlens.app.word.RunStyle
@@ -460,7 +461,7 @@ private fun EditableText(p: WParagraph, path: BlockPath, ctx: PageContext, edito
                 }
             },
     )
-    LaunchedEffect(path) { runCatching { focus.requestFocus() } }
+    LaunchedEffect(path) { runLogged("WordPage", "Focusing the paragraph") { focus.requestFocus() } }
 }
 
 /** Where each inline picture sits in the paragraph's text (characters of text before it) and the picture. */

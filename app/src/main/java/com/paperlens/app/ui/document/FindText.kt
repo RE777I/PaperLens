@@ -67,6 +67,7 @@ import com.paperlens.app.data.PageEntity
 import com.paperlens.app.ml.SearchableText
 import com.paperlens.app.data.pdfFile
 import com.paperlens.app.export.PdfPages
+import com.paperlens.app.runLogged
 import com.paperlens.app.ui.components.PdfZoomLayer
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import kotlinx.coroutines.Dispatchers
@@ -122,7 +123,7 @@ fun FindTextScreen(pages: List<PageEntity>, startPage: Int, onClose: (page: Int)
         try {
             // A page imported from a PDF has its own text with positions: no OCR needed.
             val fromPdf = page.pdfFile?.let { pdf ->
-                withContext(Dispatchers.IO) { runCatching { PDDocument.load(pdf).use { PdfPages.text(it, 0) } }.getOrNull() }
+                withContext(Dispatchers.IO) { runLogged("FindText", "Reading the page's PDF text") { PDDocument.load(pdf).use { PdfPages.text(it, 0) } }.getOrNull() }
             }
             if (fromPdf != null) {
                 texts[page.id] = fromPdf.searchable

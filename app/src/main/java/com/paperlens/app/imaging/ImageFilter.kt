@@ -337,47 +337,46 @@ object ImageProcessor {
         /** Square maximum filter, done as a row pass then a column pass. */
         private fun maxFilter(p: FloatArray, radius: Int) {
             if (radius <= 0) return
-            val tmp = FloatArray(p.size)
-            for (y in 0 until sh) for (x in 0 until sw) {
-                var m = 0f
-                for (dx in -radius..radius) {
-                    val xx = x + dx
-                    if (xx in 0 until sw) m = max(m, p[y * sw + xx])
-                }
-                tmp[y * sw + x] = m
+            val rows = FloatArray(p.size)
+            for (y in 0 until sh) for (x in 0 until sw) rows[y * sw + x] = windowMax(p, x, y, radius, alongX = true)
+            for (y in 0 until sh) for (x in 0 until sw) p[y * sw + x] = windowMax(rows, x, y, radius, alongX = false)
+        }
+
+        /** Largest value within [radius] cells of (x, y) along one axis (cells outside the grid are skipped). */
+        private fun windowMax(p: FloatArray, x: Int, y: Int, radius: Int, alongX: Boolean): Float {
+            var m = 0f
+            if (alongX) {
+                for (xx in max(0, x - radius)..min(sw - 1, x + radius)) m = max(m, p[y * sw + xx])
+            } else {
+                for (yy in max(0, y - radius)..min(sh - 1, y + radius)) m = max(m, p[yy * sw + x])
             }
-            for (y in 0 until sh) for (x in 0 until sw) {
-                var m = 0f
-                for (dy in -radius..radius) {
-                    val yy = y + dy
-                    if (yy in 0 until sh) m = max(m, tmp[yy * sw + x])
-                }
-                p[y * sw + x] = m
-            }
+            return m
         }
 
         /** Square box blur (edges mirrored), row pass then column pass. */
         private fun boxBlur(p: FloatArray, radius: Int) {
             if (radius <= 0) return
-            val n = 2 * radius + 1
-            val tmp = FloatArray(p.size)
-            fun mirror(i: Int, size: Int): Int = when {
-                size == 1 -> 0
-                i < 0 -> -i
-                i >= size -> 2 * size - 2 - i
-                else -> i
-            }.coerceIn(0, size - 1)
-            for (y in 0 until sh) for (x in 0 until sw) {
-                var s = 0f
-                for (dx in -radius..radius) s += p[y * sw + mirror(x + dx, sw)]
-                tmp[y * sw + x] = s / n
-            }
-            for (y in 0 until sh) for (x in 0 until sw) {
-                var s = 0f
-                for (dy in -radius..radius) s += tmp[mirror(y + dy, sh) * sw + x]
-                p[y * sw + x] = s / n
-            }
+            val rows = FloatArray(p.size)
+            for (y in 0 until sh) for (x in 0 until sw) rows[y * sw + x] = windowMean(p, x, y, radius, alongX = true)
+            for (y in 0 until sh) for (x in 0 until sw) p[y * sw + x] = windowMean(rows, x, y, radius, alongX = false)
         }
+
+        /** Mean of the cells within [radius] of (x, y) along one axis; the grid is mirrored at its edges. */
+        private fun windowMean(p: FloatArray, x: Int, y: Int, radius: Int, alongX: Boolean): Float {
+            var s = 0f
+            for (d in -radius..radius) {
+                s += if (alongX) p[y * sw + mirror(x + d, sw)] else p[mirror(y + d, sh) * sw + x]
+            }
+            return s / (2 * radius + 1)
+        }
+
+        /** Index [i] reflected back into 0 until [size]. */
+        private fun mirror(i: Int, size: Int): Int = when {
+            size == 1 -> 0
+            i < 0 -> -i
+            i >= size -> 2 * size - 2 - i
+            else -> i
+        }.coerceIn(0, size - 1)
 
         companion object {
             /** Default cells across the page's short side. */

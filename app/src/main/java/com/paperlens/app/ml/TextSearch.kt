@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.RectF
 import com.google.mlkit.vision.text.Text
 import com.paperlens.app.imaging.BitmapUtils
+import com.paperlens.app.runLogged
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -157,7 +158,7 @@ class SearchableText private constructor(
         }
 
         /** A stored layout, or null when there is none, it is unreadable or it belongs to another image. */
-        fun fromLayout(layout: String?, imageName: String): SearchableText? = runCatching {
+        fun fromLayout(layout: String?, imageName: String): SearchableText? = runLogged("TextSearch", "Reading stored word positions") {
             if (layout == null) return null
             val lines = layout.split('\n')
             val head = lines.first().split('\t')

@@ -7,6 +7,7 @@ import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import com.paperlens.app.ml.SearchableText
+import com.paperlens.app.runLogged
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
@@ -23,7 +24,7 @@ object PdfPages {
 
     /** Splits [doc] into one-page PDFs, written by [target] for each page index; null for a page that fails. */
     fun split(doc: PDDocument, target: (Int) -> File): List<File?> = List(doc.numberOfPages) { i ->
-        runCatching {
+        runLogged("PdfPages", "Keeping page ${i + 1} as its own PDF") {
             PDDocument().use { single ->
                 single.importPage(doc.getPage(i))
                 target(i).also { single.save(it) }
@@ -85,7 +86,7 @@ object PdfPages {
     }
 
     /** Page size in points (as shown, i.e. after its rotation), or null when the file can't be opened. */
-    fun size(file: File): Pair<Int, Int>? = runCatching {
+    fun size(file: File): Pair<Int, Int>? = runLogged("PdfPages", "Page size of ${file.name}") {
         ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
             PdfRenderer(fd).use { r -> r.openPage(0).use { it.width to it.height } }
         }
@@ -95,7 +96,7 @@ object PdfPages {
      * Renders the part [region] (fractions of the page) of [file] into a [width] × [height] bitmap: crisp
      * text and line art at any zoom. White where the page has no background of its own.
      */
-    fun render(file: File, region: RectF, width: Int, height: Int): Bitmap? = runCatching {
+    fun render(file: File, region: RectF, width: Int, height: Int): Bitmap? = runLogged("PdfPages", "Rendering part of ${file.name}") {
         ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
             PdfRenderer(fd).use { renderer ->
                 renderer.openPage(0).use { page ->

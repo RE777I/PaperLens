@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.TableChart
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
@@ -79,18 +80,19 @@ fun MetaLine(date: Long, count: Int, icon: ImageVector, label: String? = null) {
 
 /** Small "W" tag on the cover of a Word document. */
 @Composable
-private fun WordBadge(modifier: Modifier = Modifier) {
+private fun FileBadge(letter: String, color: Color, modifier: Modifier = Modifier) {
     Box(
         modifier
             .padding(4.dp)
-            .background(WordBlue, RoundedCornerShape(3.dp))
+            .background(color, RoundedCornerShape(3.dp))
             .padding(horizontal = 4.dp, vertical = 1.dp),
     ) {
-        Text("W", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+        Text(letter, color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
     }
 }
 
 private val WordBlue = Color(0xFF2B579A)
+private val ExcelGreen = Color(0xFF217346)
 
 @Composable
 fun DocumentThumbnail(summary: DocumentSummary, modifier: Modifier = Modifier) {
@@ -109,7 +111,8 @@ fun DocumentThumbnail(summary: DocumentSummary, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxSize(),
             )
         }
-        if (summary.document.isWord) WordBadge(Modifier.align(Alignment.BottomStart))
+        if (summary.document.isWord) FileBadge("W", WordBlue, Modifier.align(Alignment.BottomStart))
+        if (summary.document.isExcel) FileBadge("X", ExcelGreen, Modifier.align(Alignment.BottomStart))
     }
 }
 
@@ -150,6 +153,8 @@ fun DocumentRow(
             Spacer(Modifier.height(6.dp))
             if (summary.document.isWord) {
                 MetaLine(summary.document.updatedAt, 0, Icons.Outlined.Description, label = S.str(R.string.word))
+            } else if (summary.document.isExcel) {
+                MetaLine(summary.document.updatedAt, 0, Icons.Outlined.TableChart, label = S.str(R.string.excel))
             } else {
                 MetaLine(summary.document.updatedAt, summary.pageCount, Icons.AutoMirrored.Outlined.InsertDriveFile)
             }

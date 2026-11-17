@@ -1,12 +1,7 @@
 package com.paperlens.app.ui.capture
 
-import com.paperlens.app.S
-import com.paperlens.app.R
-
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.PointF
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -18,163 +13,84 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FlashAuto
-import androidx.compose.material.icons.filled.FlashOff
-import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.DriveFolderUpload
-import androidx.compose.material.icons.filled.PhotoLibrary
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import kotlin.math.min
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.saveable.rememberSaveable
-import kotlin.math.roundToInt
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import com.paperlens.app.data.CaptureSidecar
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.geometry.Rect
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.Image
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import coil.compose.AsyncImage
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.paperlens.app.R
+import com.paperlens.app.S
 import com.paperlens.app.imaging.BitmapUtils
 import com.paperlens.app.imaging.DocumentDetector
 import com.paperlens.app.imaging.PageOutline
+import com.paperlens.app.runLogged
 import com.paperlens.app.ui.components.toast
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
-import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 internal val Accent = Color(0xFF14A38B)
-
-/** Camera modes, in carousel order. */
-enum class CaptureMode(private val labelRes: Int, val batchByDefault: Boolean = false) {
-    EXTRACT_TEXT(R.string.extract_text),
-    TRANSLATE(R.string.translate),
-    TO_WORD(R.string.to_word),
-    SIGN(R.string.sign),
-    SCAN(R.string.scan, batchByDefault = true),
-    SMART_ERASE(R.string.smart_erase),
-    ID_CARD(R.string.id_card, batchByDefault = true),
-    BOOK(R.string.book, batchByDefault = true),
-    TO_EXCEL(R.string.to_excel),
-    WHITEBOARD(R.string.whiteboard),
-    TIMESTAMP(R.string.timestamp),
-    SCAN_CODE(R.string.scan_code),
-    ;
-    val label: String get() = S.str(labelRes)
-
-
-    val hint: String
-        get() = when (this) {
-            ID_CARD -> S.str(R.string.front_side_first_then_the_back)
-            BOOK -> S.str(R.string.capture_the_open_book_both_pages_at_once)
-            SCAN_CODE -> ""
-            else -> label
-        }
-}
-
-/** A photo waiting in the crop review: full-size, a screen-size copy, and the detected corners. */
-private class PendingShot(val photo: Bitmap, val preview: Bitmap, val outline: PageOutline?)
-
-/** Decodes a fresh capture (and deletes the file) and finds the page in it. */
-private fun pendingShot(raw: File): PendingShot {
-    val photo = BitmapUtils.decode(raw)
-    raw.delete()
-    return PendingShot(photo, BitmapUtils.scaleDown(photo, 1600), DocumentDetector.detectOutline(photo))
-}
-
-/** True when [corners] are the photo's own corners ("Full Page"), so no warp is needed. */
-private fun isWholePhoto(corners: List<PointF>, photo: Bitmap): Boolean {
-    val w = photo.width.toFloat()
-    val h = photo.height.toFloat()
-    val expected = arrayOf(floatArrayOf(0f, 0f), floatArrayOf(w, 0f), floatArrayOf(w, h), floatArrayOf(0f, h))
-    for (i in 0 until 4) {
-        val dx: Float = corners[i].x - expected[i][0]
-        val dy: Float = corners[i].y - expected[i][1]
-        if (dx * dx + dy * dy > 1f) return false
-    }
-    return true
-}
-
-private enum class Flash(val mode: Int) { OFF(ImageCapture.FLASH_MODE_OFF), AUTO(ImageCapture.FLASH_MODE_AUTO), ON(ImageCapture.FLASH_MODE_ON) }
 
 /**
  * Full-screen in-app camera: live page outline, Single / Batch, the mode carousel, and
@@ -295,7 +211,7 @@ private fun CameraContent(
                 val now = System.currentTimeMillis()
                 if (now - last > 350) {
                     last = now
-                    runCatching {
+                    runLogged("CaptureScreen", "Finding the page in a camera frame") {
                         val frame = BitmapUtils.rotate(BitmapUtils.scaleDown(proxy.toBitmap(), 480), proxy.imageInfo.rotationDegrees)
                         val steady = tracker.update(DocumentDetector.detectOutline(frame), frame.width, frame.height)
                         frameW = frame.width
@@ -318,7 +234,7 @@ private fun CameraContent(
             }.onFailure { context.toast(S.str(R.string.camera_unavailable_x, it.message)) }
         }, ContextCompat.getMainExecutor(context))
         onDispose {
-            runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
+            runLogged("CaptureScreen", "Releasing the camera") { ProcessCameraProvider.getInstance(context).get().unbindAll() }
             analysisExecutor.shutdown()
         }
     }
@@ -350,7 +266,7 @@ private fun CameraContent(
         if (busy || finishing) return
         busy = true
         val reviewIt = mode != CaptureMode.BOOK && (!batch || mode == CaptureMode.ID_CARD)
-        val frame = runCatching { previewView.bitmap?.asImageBitmap() }.getOrNull()
+        val frame = runLogged("CaptureScreen", "Freezing the preview frame") { previewView.bitmap?.asImageBitmap() }.getOrNull()
         scope.launch {
             flashAlpha.snapTo(0.75f)
             flashAlpha.animateTo(0f, tween(260))
@@ -440,40 +356,13 @@ private fun CameraContent(
     ) {
     Column(Modifier.fillMaxSize()) {
         // Top bar
-        Row(
-            Modifier
-                .statusBarsPadding()
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onCancel) { Icon(Icons.Filled.Close, S.str(R.string.close_camera), tint = Color.White) }
-            Spacer(Modifier.weight(1f))
-            Text(
-                S.str(R.string.auto),
-                color = if (autoCapture) Color.Black else Color.White,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(if (autoCapture) Accent else Color.White.copy(alpha = 0.15f))
-                    .clickable { autoCapture = !autoCapture; armed = true }
-                    .semantics { contentDescription = if (autoCapture) S.str(R.string.auto_capture_on) else S.str(R.string.auto_capture_off) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-            IconButton(onClick = { flash = Flash.entries[(flash.ordinal + 1) % Flash.entries.size] }) {
-                Icon(
-                    when (flash) {
-                        Flash.OFF -> Icons.Filled.FlashOff
-                        Flash.AUTO -> Icons.Filled.FlashAuto
-                        Flash.ON -> Icons.Filled.FlashOn
-                    },
-                    S.str(R.string.flash_x, flash.name.lowercase()),
-                    tint = Color.White,
-                )
-            }
-        }
+        CameraTopBar(
+            autoCapture = autoCapture,
+            flash = flash,
+            onCancel = onCancel,
+            onToggleAuto = { autoCapture = !autoCapture; armed = true },
+            onCycleFlash = { flash = Flash.entries[(flash.ordinal + 1) % Flash.entries.size] },
+        )
 
         // Preview + outline + mode hint + Single/Batch
         BoxWithConstraints(
@@ -570,132 +459,31 @@ private fun CameraContent(
         }
 
         // Mode carousel
-        val listState = rememberLazyListState(initialFirstVisibleItemIndex = max(0, CaptureMode.entries.indexOf(initialMode) - 2))
-        LazyRow(
-            state = listState,
-            contentPadding = PaddingValues(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(26.dp),
-            modifier = Modifier.padding(vertical = 14.dp),
-        ) {
-            itemsIndexed(CaptureMode.entries) { _, m ->
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        m.label,
-                        color = if (m == mode) Accent else Color.White.copy(alpha = 0.85f),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = if (m == mode) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = Modifier.clickable {
-                            if (m == CaptureMode.SCAN_CODE) {
-                                onScanCode()
-                            } else {
-                                mode = m
-                                batch = m.batchByDefault
-                                shots.clear()
-                                onModeChange(m)
-                            }
-                        },
-                    )
-                    Box(
-                        Modifier
-                            .padding(top = 4.dp)
-                            .size(width = 22.dp, height = 3.dp)
-                            .background(if (m == mode) Accent else Color.Transparent, RoundedCornerShape(2.dp)),
-                    )
-                }
+        ModeCarousel(initialMode, mode) { m ->
+            if (m == CaptureMode.SCAN_CODE) {
+                onScanCode()
+            } else {
+                mode = m
+                batch = m.batchByDefault
+                shots.clear()
+                onModeChange(m)
             }
         }
 
         // Batch tray: where captured pages land (reserved in batch mode so the first one has a target).
         if (shots.isNotEmpty() || batch) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                LazyRow(
-                    Modifier
-                        .weight(1f)
-                        .onGloballyPositioned { trayRect = it.boundsInRoot() },
-                    horizontalArrangement = Arrangement.spacedBy(TraySpacing),
-                ) {
-                    itemsIndexed(shots) { i, shot ->
-                        // Hidden while its frozen frame is still flying in.
-                        val landed = flying == null || i != flightTarget
-                        Box(
-                            Modifier
-                                .size(TrayWidth, TrayHeight)
-                                .border(1.dp, Color.White)
-                                .graphicsLayer { alpha = if (landed) 1f else 0f },
-                        ) {
-                            val page = shot.page
-                            if (page != null) {
-                                AsyncImage(page, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                            } else {
-                                shot.thumb?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
-                                CircularProgressIndicator(
-                                    Modifier
-                                        .align(Alignment.Center)
-                                        .size(18.dp),
-                                    color = Color.White,
-                                    strokeWidth = 2.dp,
-                                )
-                            }
-                        }
-                    }
-                }
-                if (shots.isNotEmpty()) Surface(onClick = ::finish, shape = RoundedCornerShape(20.dp), color = Accent) {
-                    Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Check, null, tint = Color.White)
-                        Text(" ${shots.size}", color = Color.White, style = MaterialTheme.typography.titleMedium)
-                    }
-                }
-            }
+            BatchTray(shots, hiddenIndex = if (flying == null) null else flightTarget, onPlaced = { trayRect = it }, onDone = ::finish)
         }
 
         // Bottom controls: the two sides get equal widths so the shutter sits exactly in the middle.
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(top = 12.dp, bottom = 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                BottomButton(S.str(R.string.all_features), Icons.Filled.Apps, onAllFeatures, Modifier.width(76.dp))
-            }
-            Box(
-                Modifier
-                    .size(78.dp)
-                    .border(4.dp, Accent, CircleShape)
-                    .padding(8.dp)
-                    .background(if (busy) Color.Gray else Color.White, CircleShape)
-                    .drawWithContent {
-                        drawContent()
-                        // Fills while the page holds still before an auto shot.
-                        val progress = if (autoCapture && armed && outline != null) stillFrames.toFloat() / STILL_FRAMES_TO_SHOOT else 0f
-                        if (progress > 0f) {
-                            val ring = 4.dp.toPx()
-                            drawArc(
-                                Accent,
-                                -90f,
-                                360f * progress.coerceAtMost(1f),
-                                false,
-                                topLeft = Offset(ring / 2, ring / 2),
-                                size = androidx.compose.ui.geometry.Size(size.width - ring, size.height - ring),
-                                style = Stroke(ring),
-                            )
-                        }
-                    }
-                    .clickable(enabled = !busy) { capture() }
-                    .semantics { contentDescription = S.str(R.string.take_picture) },
-            )
-            Row(Modifier.weight(1f)) {
-                BottomButton(S.str(R.string.import_images), Icons.Filled.PhotoLibrary, onImportImages, Modifier.weight(1f))
-                BottomButton(S.str(R.string.import_files), Icons.Filled.DriveFolderUpload, onImportFiles, Modifier.weight(1f))
-            }
-        }
+        CameraBottomControls(
+            busy = busy,
+            autoProgress = { if (autoCapture && armed && outline != null) stillFrames.toFloat() / STILL_FRAMES_TO_SHOOT else 0f },
+            onShutter = { capture() },
+            onAllFeatures = onAllFeatures,
+            onImportImages = onImportImages,
+            onImportFiles = onImportFiles,
+        )
     }
 
     // Shutter flash
@@ -756,59 +544,5 @@ private fun CameraContent(
             }
         }
     }
-    }
-}
-
-/** Analysed frames (about 350 ms apart) the page must hold still before an auto shot. */
-private const val STILL_FRAMES_TO_SHOOT = 3
-
-private val TrayWidth = 44.dp
-private val TrayHeight = 56.dp
-private val TraySpacing = 6.dp
-
-/** One captured page in the tray: the frozen frame at once, the processed page when ready. */
-private class Shot(val thumb: ImageBitmap?) {
-    var page by mutableStateOf<Uri?>(null)
-}
-
-private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
-
-/** Crops a fresh capture to the page it finds (unless [crop] is false) and saves it for the document. */
-private fun processShot(context: android.content.Context, raw: File, crop: Boolean): File {
-    val photo = BitmapUtils.decode(raw)
-    raw.delete()
-    val outline = if (crop) DocumentDetector.detectOutline(photo) else null
-    val page = File(context.cacheDir, "capture/page_${UUID.randomUUID()}.jpg")
-    BitmapUtils.saveJpeg(outline?.let { DocumentDetector.warp(photo, it) } ?: photo, page, 92)
-    if (outline != null) CaptureSidecar.write(page, photo, outline)
-    return page
-}
-
-/** Saves a single shot cropped to the corners chosen in the review. */
-private fun saveReviewed(context: android.content.Context, photo: Bitmap, outline: PageOutline): File {
-    val page = File(context.cacheDir, "capture/page_${UUID.randomUUID()}.jpg")
-    if (isWholePhoto(outline.corners, photo) && !outline.curved) {
-        BitmapUtils.saveJpeg(photo, page, 92)
-    } else {
-        BitmapUtils.saveJpeg(DocumentDetector.warp(photo, outline), page, 92)
-        CaptureSidecar.write(page, photo, outline)
-    }
-    return page
-}
-
-@Composable
-private fun BottomButton(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier.clickable(onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon(icon, null, Modifier.size(30.dp), tint = Color.White)
-        Text(label, color = Color.White, style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
-        Spacer(Modifier.height(0.dp))
     }
 }
